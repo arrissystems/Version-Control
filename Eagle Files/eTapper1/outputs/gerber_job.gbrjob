@@ -1,0 +1,13 @@
+G04 Gerber job file.*
+%TF.FileFunction,JobInfo*%
+%TF.GenerationSoftware,Autodesk,EAGLE,8.7.1*%
+%TF.CreationDate,2018-03-30T22:44:39Z*%
+%TF.Part,Single*%
+%MOMM*%
+%TJ.B_Owner,David Cheung <dkcheung@arrisnet.com>*%
+%TJ.B_ID,eTapper1main57*%
+%TJ.B_LayerNum,2*%
+%TJ.B_Thickness,0.832000*%
+%TJ.B_Size_X,127.015041*%
+%TJ.B_Size_Y,68.834000*%
+M02*

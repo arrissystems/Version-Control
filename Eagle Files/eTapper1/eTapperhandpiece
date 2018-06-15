@@ -1,0 +1,71 @@
+Partlist
+
+Exported from e-Tapperhandpiece18.sch at 8/15/2017 1:05 PM
+
+EAGLE Version 8.2.2 Copyright (c) 1988-2017 Autodesk, Inc.
+
+Assembly variant: 
+
+Part     Value          Device     Package   Library  Sheet
+
+C1                      C-USC0603  C0603     rcl      1
+C2                      C-USC0603  C0603     rcl      1
+C3                      C-USC0603  C0603     rcl      1
+C4                      C-USC0603  C0603     rcl      1
+C5                      C-USC0603  C0603     rcl      1
+C6                      C-USC0603  C0603     rcl      1
+C7                      C-USC0603  C0603     rcl      1
+C8                      C-USC0603  C0603     rcl      1
+C9                      C-USC0603  C0603     rcl      1
+C10                     C-USC0603  C0603     rcl      1
+C11                     C-USC0603  C0603     rcl      1
+C12                     C-USC0603  C0603     rcl      1
+C13      0.1 uF         C-USC0603  C0603     rcl      1
+C14      10 uF          C-USC0805  C0805     rcl      1
+LSP13    SE11           SE11       SE11      solpad   1
+R1                      R-US_R0402 R0402     resistor 1
+R2                      R-US_R0402 R0402     resistor 1
+R3                      R-US_R0402 R0402     resistor 1
+R4                      R-US_R0402 R0402     resistor 1
+R5                      R-US_R0402 R0402     resistor 1
+R6                      R-US_R0402 R0402     resistor 1
+R7                      R-US_R0402 R0402     resistor 1
+R8                      R-US_R0402 R0402     resistor 1
+R9                      R-US_R0402 R0402     resistor 1
+R10                     R-US_R0402 R0402     resistor 1
+R11                     R-US_R0402 R0402     resistor 1
+R12                     R-US_R0402 R0402     resistor 1
+R13                     R-US_R0402 R0402     resistor 1
+R14                     R-US_R0402 R0402     resistor 1
+R15                     R-US_R0402 R0402     resistor 1
+R16                     R-US_R0402 R0402     resistor 1
+R17                     R-US_R0402 R0402     resistor 1
+R18                     R-US_R0402 R0402     resistor 1
+R19                     R-US_R0402 R0402     resistor 1
+R20                     R-US_R0402 R0402     resistor 1
+R21                     R-US_R0402 R0402     resistor 1
+R22                     R-US_R0402 R0402     resistor 1
+R23                     R-US_R0402 R0402     resistor 1
+R24                     R-US_R0402 R0402     resistor 1
+R25      10 K           R-US_R0402 R0402     resistor 1
+TSP1     ET1            ET1        ET1       ET1      1
+TSP2     ET1            ET1        ET1       ET1      1
+TSP3     ET1            ET1        ET1       ET1      1
+TSP4     ET1            ET1        ET1       ET1      1
+TSP5     ET1            ET1        ET1       ET1      1
+TSP6     ET1            ET1        ET1       ET1      1
+TSP7     ET1            ET1        ET1       ET1      1
+TSP8     ET1            ET1        ET1       ET1      1
+TSP9     ET1            ET1        ET1       ET1      1
+TSP10    ET1            ET1        ET1       ET1      1
+TSP11    ET1            ET1        ET1       ET1      1
+TSP12    ET1            ET1        ET1       ET1      1
+TSP13    ET1            ET1        ET1       ET1      1
+TSP14    ET1            ET1        ET1       ET1      1
+TSP15    ET1            ET1        ET1       ET1      1
+TSP16    ET1            ET1        ET1       ET1      1
+TSP17    ET1            ET1        ET1       ET1      1
+TSP18    ET1            ET1        ET1       ET1      1
+TSP19    ET1            ET1        ET1       ET1      1
+U$1      LTC2497        LTC2497    QFN38-5X7 LTC2497  1
+U$2      SS112D01       SS112D01   SS112D01  SS112D01 1

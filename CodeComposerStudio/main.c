@@ -7,7 +7,15 @@
  * Revision 03/02/2018 changed writeintensity to show Adult double values
  * Revision 03/14/2018 fixed keybounce changed scanhnd to use average as base value
  * Revision V1 04/19/2018 Enter into Version Control in Git
+ * Revision V2 04/19/2018 Changed scanhand timing and display baseline
+ * Revision V3 05/18/2018 Added clktest and make array size selectable
+ * Revision V4 06/02/2018 Added automatic voltage level setting for scanning
+ * Revision V5 06/08/2018 Added recall of scanning and recall of RTP, LTP, and levels, independent Scan voltage levela
 */
+
+#define VER4    true
+#define VER5    true
+#define clktest false       //true
 
 //#include    "msp430f2274.h"
 //#include    "msp430f2748.h"
@@ -18,23 +26,32 @@
 
 #include <stdint.h>
 #include <stdbool.h>
+//#include "boot.h"
 
 #include    "charmap.h"
 #include    "newimmumax2.h"
 
 #define BYTE    unsigned char
+#define scandly 450                                                     // scan pulse width
+#define offdly  150                                                     // trailing
+#define setdly  100                                                     // leading
+int     lscanvt;                                                        // scan voltage
+int     rscanvt;                                                        // scan voltage
+#define arrayj  8                                                       // 8, 4, 2 VER3
+#define arrayc  3                                                       // 3, 2, 1 VER3
 
-void delay(int xdelay);
+int main(void);
+void timeout(void);
+void delay0(int xdelay);
+void delay1(int xdelay);
+void delay2(int xdelay);
 void pulsexfmr(void);
-void RESET (void);
-void Setup (void);
 void ExitSleep (void);
 void EnterSleep (void);
 void write_data(unsigned char data1);
 void write_command(unsigned char command);
 void scanadc(unsigned int INCHAN);
 void sdelay(int xdelay);
-void sdelay1(int xdelay);
 void charAll(int redmask, int greenmask, int bluemask);
 void beeper(void);
 unsigned int leftscanchan(void);
@@ -53,19 +70,22 @@ int         green;
 int         blue;
 int         SwitchData;
 int         powerison;
+int         previousstate;
+bool        powerup;
 bool        haskey;
 bool        rdbattery;
-int         dlycnt;
+int         dlycnt0;
 int         dlycnt1;
 int         dlycnt2;
 int         dlycnt3;
 int         clockcnt;
 bool        callclock;
 int         hasswitch;
-bool        rewritescreen;
+bool        norewrite;
 bool        scanit;
-unsigned int        RUP;
-unsigned int        LUP;
+bool        scanning;
+BYTE        RUP;
+BYTE        LUP;
 int         CHILD;
 int         idata;
 int         p1iflag;
@@ -90,7 +110,7 @@ int         iPixC;
 int         iPixR;
 int         NUMA[3]={0,0,0};
 
-unsigned char timercounter;
+//unsigned char timercounter;
 
 int         leftadcval;
 int         rightadcval;
@@ -98,10 +118,12 @@ int         leftmax;
 int         rightmax;
 int         leftbar[11];
 int         rightbar[11];
-int         leftadcarray[13][5];
-int         rightadcarray[13][5];
+int         leftadcarray[13][arrayj];                                   // VER3
+int         rightadcarray[13][arrayj];                                  // VER3
 int         leftarray[13];
 int         rightarray[13];
+//int         leftmean;
+//int         rightmean;
 int         ltpoint;
 int         rtpoint;
 bool        extmode;
@@ -112,8 +134,8 @@ int         leftave;
 int         rightave;
 int         leftrange;
 int         rightrange;
-int         llastp4;
-int         rlastp4;
+BYTE        llastp4;
+BYTE        rlastp4;
 
 char        PrgAry[5];
 int         BatPcnt;
@@ -221,7 +243,13 @@ const unsigned char * all[] =                                           //94 add
 
 };
 
-void delay(int xdelay)                                                  // delay for xdelay ms
+void delay0(int xdelay)                                                 // delay for xdelay ms
+{
+    dlycnt0 = xdelay;                                                   // use timer interrupt
+    while(dlycnt0>0);
+}
+
+void delay1(int xdelay)                                                 // delay for xdelay ms
 {
     dlycnt1 = xdelay;                                                   // use timer interrupt
     while(dlycnt1>0);
@@ -234,16 +262,7 @@ void delay2(int xdelay)                                                 // delay
 }
 
 
-void sdelay(int xdelay)                                                 // delay for xdelay nops
-{
-int intii;
-    for(intii=xdelay;intii>0;intii--)                                   // use nops
-    {
-        __no_operation();
-    }
-}
-
-void sdelay1(int xdelay)                                                // delay for xdelay nops
+void sdelay(int xdelay)                                                 // delay for xdelay nops 0.6133uS
 {
 int intii;
     for(intii=xdelay;intii>0;intii--)                                   // use nops
@@ -268,9 +287,7 @@ void write_command(unsigned char command)
     P2OUT &= ~(BIT3);                                                   // set D/C low for command
     P2OUT &= ~(BIT0);                                                   // /CS low
     P2OUT &= ~(BIT1);                                                   // set WR low P2.1
-    sdelay(3);
     P2OUT |= (BIT1);                                                    // set WR high P2.1
-    sdelay(3);
     P2OUT |= (BIT0);                                                    // /CS high
 }
 
@@ -281,27 +298,9 @@ void write_data(unsigned char data1)
     P2OUT |= (BIT1 + BIT2 + BIT3);                                      //set RD,WR,D/C high
     P2OUT &= ~(BIT0);                                                   // /CS low
     P2OUT &= ~(BIT1);                                                   // set WR low P2.1
-    sdelay(3);
     P2OUT |= (BIT1);                                                    // set WR high P2.1
-    sdelay(3);
     P2OUT |= (BIT0);                                                    // /CS high
 
-}
-
-void read_data(void)
-{
-    P4DIR = 0x00;                                                       // set port to input
-    P2OUT |= (BIT1 + BIT2);                                             //set RD,WR high
-    P2OUT |= (BIT3);                                                    //set D/C high for data
-    P2OUT &= ~(BIT0);                                                   // /CS low
-    sdelay(2);
-    P2OUT &= ~(BIT2);                                                   // set RD low P2.2
-    sdelay(10);
-    P2OUT |= (BIT2);                                                    // set RD high P2.2
-    idata = P4IN;                                                       //input from 8 bit data port
-    P2OUT |= (BIT0);                                                    // /CS back high
-
-    P4DIR |= (BIT0 + BIT1 + BIT2 + BIT3 + BIT4 + BIT5 +BIT6 + BIT7);    // Set P2.0,1,2,3,4,5 to output
 }
 
 void writemonochar(int tmp, int REDM, int GRNM, int BLUM)
@@ -344,18 +343,18 @@ void initi(void)
     P2OUT &= ~(BIT0);                                                   // /CS low
     //   res=1;
     P3OUT |= (BIT5);                                                    //LCD LRESET high
-    delay(1);                                                           //delay 1 ms
+    delay1(1);                                                          //delay 1 ms
     //   res=0;
     P3OUT &= ~(BIT5);                                                   //LCD LRESET Low
-    delay(10);                                                          //delay 10 ms
+    delay1(10);                                                         //delay 10 ms
     //   res=1;
     P3OUT |= (BIT5);                                                    //LCD LRESET back high
-    delay(120);                                                         //delay 120 ms
+    delay1(120);                                                        //delay 120 ms
 
 
 //**********************************************************************//LCD SETING
     write_command(0x11);                                                //sleepout command turn off sleep
-    delay(120);                                                         //Delay 120ms
+    delay1(120);                                                        //Delay 120ms
 
     write_command(0x36);                                                //Memory data access control
     write_data(0xE0);                                                   //BIT7=1 Page address left to right
@@ -457,9 +456,9 @@ void EnterSleep (void)
 {
     P3OUT &= ~(BIT2);                                                   // turn off LLED
     write_command(0x28);
-    delay(100);                                                          // delay 20ms
+    delay1(100);                                                        // delay 20ms
     write_command(0x10);
-    delay(100);                                                          // delay 20ms
+    delay1(100);                                                        // delay 20ms
 
 }
 
@@ -468,7 +467,7 @@ void ExitSleep (void)
 
 {
     write_command(0x11);
-    delay(120);                                                         // delay 120ms
+    delay1(120);                                                        // delay 120ms
     write_command(0x29);
 
 }
@@ -532,7 +531,7 @@ void    charAll(int redmask, int greenmask, int bluemask)
     pointer = 80;
     while(pointer>0)                                                    // 80 ints per character 16X20 pixels
     {
-        if((pointer & 0x01)==0)                                     //skip the extra word from paint conversion
+        if((pointer & 0x01)==0)                                         //skip the extra word from paint conversion
         {
             pointer-=2;
         }
@@ -556,12 +555,13 @@ void    charAll(int redmask, int greenmask, int bluemask)
 #pragma vector=PORT1_VECTOR
 __interrupt void myport1_isr(void)
 {
-    if(powerison==0)
+    if(powerup==true)
     {
         __bic_SR_register(LPM3_bits);                                   // CPU back on
         P1IFG=0;
-        WDTCTL &= WDTHOLD;                                              // Generate a PUC reset
-        while(1);
+        WDTCTL = WDTPW | WDTHOLD;                                       // stop watchdog timer
+        __asm("\t   MOV.W\t    #0x20FE,SP");                            // reload stack
+        __asm("\t   JMP\t    main");                                    // go to main
 
     }
 
@@ -583,15 +583,15 @@ __interrupt void myport1_isr(void)
 //  Interrupt Service Routines
 #pragma vector = TIMER0_A0_VECTOR                                       // 0.9765ms each interrupt
 __interrupt void CCR0_ISR(void) {
-    if(dlycnt>0)
+    if(dlycnt0>0)
     {
-        dlycnt-=1;
+        dlycnt0-=1;
     }
-    if(dlycnt1>0)
+    if(dlycnt1>0)                                                        // for xdelay1()
     {
         dlycnt1-=1;
     }
-    if(dlycnt2>0)
+    if(dlycnt2>0)                                                        // for xdelay2()
     {
         dlycnt2-=1;
     }
@@ -599,41 +599,45 @@ __interrupt void CCR0_ISR(void) {
     {
         switchcnt-=1;
     }
-    clockcnt-=1;
-    if(clockcnt==0)
+
+    if(scanning == false)
     {
-        callclock=true;
-        clockcnt=512;
-        TSEC+=1;
-        if(TSEC>1)
+        clockcnt-=1;
+        if(clockcnt==0)
         {
-            TSEC=0;
-            SEC+=1;
-            if(displaytimer>0)
+            callclock=true;
+            clockcnt=512;
+            TSEC+=1;
+            if(TSEC>1)
             {
-                displaytimer-=1;
+                TSEC=0;
+                SEC+=1;
+                if(displaytimer>0)
+                {
+                    displaytimer-=1;
+                }
+            }
+            if(SEC>59)
+            {
+                SEC=0;
+                MIN+=1;
+                rdbattery = true;
             }
         }
-        if(SEC>59)
-        {
-            SEC=0;
-            MIN+=1;
-            rdbattery = true;
-        }
-    }
 
 
-    if(beeperon)
-    {
-        if(dlycnt3>0)
+        if(beeperon)
         {
-            dlycnt3-=1;
-            P3OUT |= (BIT1);
-        }
-        else
-        {
-            beeperon=false;
-            P3OUT &= ~(BIT1);
+            if(dlycnt3>0)
+            {
+                dlycnt3-=1;
+                P3OUT |= (BIT1);
+            }
+            else
+            {
+                beeperon=false;
+                P3OUT &= ~(BIT1);
+            }
         }
     }
     //_enable_interrupt();
@@ -664,14 +668,12 @@ __interrupt void ADC10_ISR (void)
 {
     ADCValue = ADC10MEM;                                                // Saves measured value.
     ADCDone = false;                                                    // Sets flag for main loop. TRUE
-//    __bic_SR_register_on_exit(CPUOFF);                                // Enable CPU so the main while loop continues
-
 }
 
 
-int    xchangebits(int ibits)
+BYTE    xchangebits(int ibits)
 {
-int cii;
+BYTE cii;
     switch (ibits)
     {
     case 1:
@@ -756,7 +758,7 @@ void write3digits(int inumber, int REDM, int GRNM, int BLUM)
     }
     charAll(REDM, GRNM, BLUM);
 
-    iCols+=1;                                                         //write 2nd digit
+    iCols+=1;                                                           //write 2nd digit
     ichar = NUMA[1]+0x30;
     charAll(REDM, GRNM, BLUM);
 
@@ -850,7 +852,7 @@ unsigned int    i;
     }
     else
     {
-        if (CHILD==1)
+        if (CHILD==0)                                                   // VER5 init CHILD to 0
         {
             PrgAry[0] = 'C';
             PrgAry[1] = 'H';
@@ -863,7 +865,7 @@ unsigned int    i;
                 charAll(0xff, 0x7f, 0xff);
             };
         };
-        if (CHILD==2)
+        if (CHILD==1)
         {
             PrgAry[0] = 'A';
             PrgAry[1] = 'D';
@@ -905,7 +907,7 @@ unsigned int    i, j, k;
 
     iRows=2;                                                            //display left intensity bar
     iCols=1;
-    if(CHILD==2)
+    if(CHILD==1)                                                        // VER5 init CHILD to 0
     {
         j=LUP>>1;
     }
@@ -925,7 +927,7 @@ unsigned int    i, j, k;
 
     iRows=2;                                                            //display right intensity bar
     iCols=18;
-    if(CHILD==2)
+    if(CHILD==1)                                                        // VER5 init CHILD to 0
     {
         k=RUP>>1;
     }
@@ -1037,13 +1039,12 @@ void leftselchan(int bii)
     sdelay(3);
 }
 
+
 unsigned int leftscanchan(void)
 {
     P2OUT |= (BIT4);                                                    // turn on LHVTRIG
-    sdelay(130);                                                        // 0.6133 us each
-
+    sdelay(scandly);                                                    // 0.6133 us each
     scanadc(INCH_5);                                                    // return value in ADCValue
-    sdelay(10);
     P2OUT &= ~(BIT4);                                                   // turn LHVTRIG off
     return  ADCValue;
 }
@@ -1093,167 +1094,241 @@ void rightselchan(int bii)
 unsigned int rightscanchan(void)
 {
     P2OUT |= (BIT5);                                                    // turn on RHVTRIG
-    sdelay(130);                                                        // 0.6133 us each
-
+    sdelay(scandly);                                                    // 0.6133 us each
     scanadc(INCH_6);                                                    // return value in ADCValue
-    sdelay(10);
     P2OUT &= ~(BIT5);                                                   // turn RHVTRIG off
     return  ADCValue;
 }
-
 
 void scanhand(void)
 {
     unsigned int i, j;
 
-    leftsetvoltage(7);
-    delay2(150);
-    leftselchan(12);
-    delay2(50);
-    leftadcval=leftscanchan();
-    leftarray[12] = leftadcval;
-    delay2(50);
-    leftselchan(12);
-    delay2(50);
-    leftadcval=leftscanchan();
-    leftarray[12] += leftadcval;
-    leftarray[12] = leftarray[12]>>1;
-    delay2(50);
+    scanning = true;
+    P1IE  = 0x00;                                                       // 0-6 inputs interrupt disable
+    P1IFG = 0x00;                                                       // clear interrupt flags
 
-    for(j=0;j<4;j++)
+    // first test to activate the voltage regulators
+    lscanvt = 4;
+    rscanvt = 4;
+    leftsetvoltage(lscanvt);                                            // changes P4, strobe LVSEL
+    rightsetvoltage(rscanvt);                                           // changes P4, strobe RVSEL
+    delay0(500);                                                        // suppress trailing edge droop
+    leftselchan(12);                                                    // changes P4, strobe LVSEL
+    rightselchan(12);                                                   // changes P4, strobe RVSEL
+    delay0(setdly);                                                     // suppress leading edge spike
+    leftadcval=leftscanchan();
+    rightadcval=rightscanchan();
+
+    while(lscanvt < 10)
+    {
+        leftsetvoltage(lscanvt);                                        // changes P4, strobe LVSEL
+
+        leftmax=0;
+        leftmin=2048;
+        leftave=0;
+
+        for(i=0; i<11; i++)
+        {
+            leftselchan(i);                                             // changes P4, strobe LVSEL
+            delay0(setdly);                                             // suppress leading edge spike
+            leftadcval=leftscanchan();
+            leftarray[i] = leftadcval;
+            delay0(offdly);                                             // suppress trailing edge droop
+
+            if(leftmax < leftarray[i])
+                leftmax = leftarray[i];
+            if(leftmin > leftarray[i])
+                leftmin=leftarray[i];
+        }
+
+        if((leftmax - leftmin) > 11)
+        {
+            break;
+        }
+        lscanvt+=1;
+    }
+
+    while(rscanvt < 10)
+    {
+        rightsetvoltage(rscanvt);                                       // changes P4, strobe RVSEL
+
+        leftmax=0;
+        leftmin=2048;
+        leftave=0;
+
+        rightmax=0;
+        rightmin=2048;
+        rightave=0;
+
+        for(i=0; i<11; i++)
+        {
+            rightselchan(i);                                            // changes P4, strobe RVSEL
+            delay0(setdly);                                             // suppress leading edge spike
+            rightadcval=rightscanchan();
+            rightarray[i] = rightadcval;
+            delay0(offdly);                                             // suppress trailing edge droop
+
+            if(rightmax < rightarray[i])
+                rightmax = rightarray[i];
+            if(rightmin > rightarray[i])
+                rightmin=rightarray[i];
+        }
+
+        if((rightmax - rightmin) > 11)
+        {
+            break;
+        }
+        rscanvt+=1;
+    }
+
+    lscanvt+=1;                                                         // give it one higher level
+    rscanvt+=1;                                                         // give it one higher level
+    leftsetvoltage(lscanvt);                                            // changes P4, strobe LVSEL
+    rightsetvoltage(rscanvt);                                           // changes P4, strobe RVSEL
+
+    leftarray[12] = 0;
+    rightarray[12] = 0;
+
+    for(j=0; j<arrayj; j++)
+    {
+        leftselchan(12);                                                // changes P4, strobe LVSEL
+        rightselchan(12);                                               // changes P4, strobe RVSEL
+        delay0(setdly);                                                 // suppress leading edge spike
+        leftadcval=leftscanchan();
+        rightadcval=rightscanchan();
+        leftadcarray[12][j] = leftadcval;
+        leftarray[12] += leftadcval;
+        rightadcarray[12][j] = rightadcval;
+        rightarray[12] += rightadcval;
+        delay0(offdly);                                                 // suppress trailing edge droop
+
+    }
+
+    leftarray[12] = leftarray[12]>>arrayc;
+    rightarray[12] = rightarray[12]>>arrayc;
+
+    for(j=0;j<arrayj;j++)                                               // VER3
     {
         for(i=0;i<11;i++)
         {
-            leftselchan(i);
-            delay2(50);
             leftadcarray[i][j]=0;
-            leftadcval = leftscanchan();
+            rightadcarray[i][j]=0;
+            leftselchan(i);                                             // changes P4, strobe LVSEL
+            rightselchan(i);                                            // changes P4, strobe RVSEL
+            delay0(setdly);                                             // suppress leading edge spike
+            leftadcval=leftscanchan();
+            rightadcval=rightscanchan();
             leftadcarray[i][j] = leftadcval;
-            delay2(50);
+            rightadcarray[i][j] = rightadcval;
+
+            delay0(offdly);                                             // suppress trailing edge droop
         }
     }
+
+    P1IE  = 0x7F;                                                       // 0-6 inputs interrupt enable
+    voltageoff();
+    scanning = false;
 
     leftmax=0;
     leftmin=2048;
     leftave=0;
+
+    rightmax=0;
+    rightmin=2048;
+    rightave=0;
+
     for(i=0;i<11;i++)
     {
         leftarray[i]=0;
-        for(j=0;j<4;j++)
+        rightarray[i]=0;
+        for(j=0;j<arrayj;j++)                                           // VER3
         {
             leftarray[i]+=leftadcarray[i][j];
+            rightarray[i]+=rightadcarray[i][j];
         }
-        leftarray[i] = leftarray[i]>>2;
+        leftarray[i] = leftarray[i]>>arrayc;                            // VER3 get average
+        rightarray[i] = rightarray[i]>>arrayc;                          // VER3
+
+        leftarray[i] = leftarray[i] - leftarray[12];
+        rightarray[i] = rightarray[i] - rightarray[12];
+
+        if(leftarray[i] < 0)
+            leftarray[i] = 0;
+        if(rightarray[i] < 0)
+            rightarray[i] = 0;
+
         leftave+=leftarray[i];
         if(leftmax < leftarray[i])
             leftmax = leftarray[i];
         if(leftmin > leftarray[i])
             leftmin=leftarray[i];
-    }
-    leftave=leftave/11+1;
 
-    // scan right handpiece next
-
-    rightsetvoltage(7);
-    delay2(150);
-    rightselchan(12);
-    delay2(50);
-    rightadcval=rightscanchan();
-    delay2(50);
-    rightselchan(12);
-    delay2(50);
-    rightadcval=rightscanchan();
-    rightarray[12] += rightadcval;
-    rightarray[12] = rightarray[12]>>1;
-    delay2(50);
-
-    for(j=0;j<4;j++)
-    {
-        for(i=0;i<11;i++)
-        {
-            rightselchan(i);
-            delay2(50);
-            rightadcarray[i][j]=0;
-            rightadcval = rightscanchan();
-            rightadcarray[i][j] = rightadcval;
-            delay2(50);
-        }
-    }
-
-    rightmax=0;
-    rightmin=2048;
-    rightave=0;
-    for(i=0;i<11;i++)
-    {
-        rightarray[i]=0;
-        for(j=0;j<4;j++)
-        {
-            rightarray[i]+=rightadcarray[i][j];
-        }
-        rightarray[i] = rightarray[i]>>2;
         rightave+=rightarray[i];
         if(rightmax < rightarray[i])
             rightmax = rightarray[i];
         if(rightmin > rightarray[i])
             rightmin=rightarray[i];
     }
-    rightave=rightave/11+1;
-    voltageoff();
+    leftave=leftave/11;
+    rightave=rightave/11;
 
-    leftrange = leftmax-leftmin;
     iPixC = 16;                                                         //16 pixels horizontal
     iPixR = 20;                                                         //20 pixels vertical
 
-    iRows = 10;                                                         //display left hand intensity
-    iCols = 1;
+    iRows = 11;                                                         //display left hand intensity
+    iCols = 3;
     write3digits(leftmax, 0xff, 0, 0xff);
-    iCols +=2;
-    write3digits(leftmin, 0xff, 0, 0xff);
+    iCols +=1;
+    write3digits(lscanvt, 0xff, 0, 0xff);
 
+    iRows = 11;                                                         //display right hand intensity
+    iCols = 12;
+    write3digits(rightmax, 0xff, 0x7f, 0);
+    iCols +=1;
+    write3digits(rscanvt, 0xff, 0x7f, 0);
 
-    if(leftrange < 7)
+    leftrange = leftmax-leftave;                                        //leftmax-leftave
+
+    rightrange = rightmax-rightave;                                     //rightmax-rightave
+
+    if(leftrange < 10)                                                  // no signal
     {
-        leftrange=7;
+        leftrange = 0x7fff;
     }
 
-    rightrange = rightmax-rightmin;
-    iRows = 10;                                                         //display right hand intensity
-    iCols = 17;
-    write3digits(rightmax, 0xff, 0x7f, 0);
-    iCols +=2;
-    write3digits(rightmin, 0xff, 0x7f, 0);
-
-
-    if(rightrange < 7)
+    if(rightrange < 10)                                                 // no signal
     {
-        rightrange = 7;
+        rightrange = 0x7fff;
     }
 
     for (i=0;i<11;++i)                                                  //get values from adc
     {
         ltmp=leftarray[i]-leftave;
+        ltmp = ltmp*7;
+        ltmp = ltmp / leftrange;
 
-        if(ltmp > 0)
+        if(ltmp > 1)
         {
-            ltmp=leftarray[i]-leftmin;                                          //-leftmin;
+            leftbar[i]=ltmp;
         }
         else
         {
-            ltmp=0;
+            leftbar[i]=0;
         }
-        leftbar[i]=ltmp*7/leftrange;
 
         ltmp=rightarray[i]-rightave;
+        ltmp = ltmp*7;
+        ltmp = ltmp / rightrange;
 
-        if(ltmp > 0)
+        if(ltmp > 1)
         {
-            ltmp=rightarray[i]-rightmin;                                         //-rightmin;
+            rightbar[i]=ltmp;                                           //-rightmin;
         }
         else
         {
-            ltmp=0;
+            rightbar[i]=0;
         }
-        rightbar[i]=ltmp*7/rightrange;
 
         if (leftbar[i] > 7)
         {
@@ -1282,7 +1357,7 @@ int Init(void)
 //    P1SEL2 = 0x00;                                                    // Turn off capacitive sensing
     P1DIR = 0x80;                                                       // Set P1.0-6 to Input 7 to output
     P1REN = 0x7F;                                                       // Turn on P1.0-6 pull ups
-    P1IE  = 0x7F;                                                       // 0-6 inputs interrupt
+    P1IE  = 0x7F;                                                       // 0-6 inputs interrupt enabled
     P1IES = 0xFF;                                                       // interrupt on high to low edge
     P1IFG = 0;
 
@@ -1326,43 +1401,362 @@ int Init(void)
     SEC=0;
     MIN=0;
     powerison=1;
-    dlycnt=0;
+    dlycnt0=0;
     dlycnt1=0;
     dlycnt2=0;
     clockcnt=512;
     callclock=false;
     hasswitch=0;                                                        // switches pressed counter
     haskey=false;
-    CHILD=1;
-    LUP=0;                                                              // for testing only, set to 0 for normal
-    RUP=0;                                                              // for testing only, set to 0 for normal
-    rewritescreen=true;
-    UserMinutes=0;                                                      // Start with 30 minutes for testing only, set to 0 for normal
     ADCDone=true;
     rdbattery=true;
     p1iflag=0;
     beeperon=false;
     displaytimer=90;
     switchcnt=0;
-    ltpoint=1;
-    rtpoint=1;
-    extmode=false;
-    leftselchan(ltpoint);                                               // P3 and P4 to set TP end with P4=0
-    rightselchan(rtpoint);
     scanit = false;
+    scanning = false;
+
+#if  clktest
+    P2SEL |=0x01;                                                       // turn on aclk for test
+    while(1);
+#endif
 
     return 0;
 }
 
+void printscanning(void)
+{
+    iRows=4;
+    iCols=3;
+    ichar='S';
+    charAll(0, 0xff, 0xff);
+    iCols++;
+    ichar='C';
+    charAll(0, 0xff, 0xff);
+    iCols++;
+    ichar='A';
+    charAll(0, 0xff, 0xff);
+    iCols++;
+    ichar='N';
+    charAll(0, 0xff, 0xff);
+    iCols++;
+    ichar='N';
+    charAll(0, 0xff, 0xff);
+    iCols++;
+    ichar='I';
+    charAll(0, 0xff, 0xff);
+    iCols++;
+    ichar='N';
+    charAll(0, 0xff, 0xff);
+    iCols++;
+    ichar='G';
+    charAll(0, 0xff, 0xff);
+    iCols++;
+    ichar=' ';
+    charAll(0, 0xff, 0xff);
+    iCols++;
+    ichar='W';
+    charAll(0, 0xff, 0xff);
+    iCols++;
+    ichar='A';
+    charAll(0, 0xff, 0xff);
+    iCols++;
+    ichar='I';
+    charAll(0, 0xff, 0xff);
+    iCols++;
+    ichar='T';
+    charAll(0, 0xff, 0xff);
 
-int main(void)
+}
+
+void printbars(void)
 {
     unsigned int i, j;
-    int     tmp;
-    int     tmpswitch;
+
+    iPixC = 16;                                                         //16 pixels horizontal
+    iPixR = 20;                                                         //20 pixels vertical
+//
+//  Blank bar areas
+//
+    ichar='Z';
+    for (i=0;i<11;i++)                                                  //display left hand scan result
+    {
+        iRows=10-i;
+        ichar=' ';
+        iCols=2;
+        for (j=0;j<15;j++)
+        {
+            charAll(0xff, 0xff, 0xff);
+            iCols+=1;
+        }
+    }
+
+    ichar='Z';
+    for (i=0;i<11;i++)                                                  //display left hand scan result
+    {
+        iRows=10-i;
+        iCols=2;
+        for (j=0;j<leftbar[i];j++)
+        {
+            charAll(0xff, 0xff, 0xff);
+            iCols+=1;
+        }
+
+        iCols=17-rightbar[i];
+        for (j=0;j<rightbar[i];j++)
+        {
+            charAll(0xff, 0xff, 0xff);
+            iCols+=1;
+        }
+    }
+
+}
+
+void rewritescr(void)
+{
+    unsigned int i;
     unsigned long intii;
     unsigned int pointer;
     char LabelAry[8];
+    int     tmp;
+
+    write_command(0x2A); //
+    write_data(0x00);
+    write_data(0x00);
+    write_data(0x01);
+    write_data(0x3F);
+
+    write_command(0x2B); //
+    write_data(0x00);
+    write_data(0x00);
+    write_data(0x00);
+    write_data(0xEF);
+
+    //**********************
+    write_command(0x29);                                                //display on
+    write_command(0x2C);                                                //RAM write control
+
+    pointer = 9599;
+
+    for(intii=9600;intii>0;intii--)                                     // 16 character 20 pixels= 320 columns
+    {
+        tmp = newfacemono99[pointer] & 0x01;                            // one bit per pixel
+        writemonochar(tmp, 0xff, 0xff, 0x00);                           // blue color
+        tmp = newfacemono99[pointer] & 0x02;                            // one bit per pixel
+        writemonochar(tmp, 0xff, 0xff, 0x00);                           // blue color
+        tmp = newfacemono99[pointer] & 0x04;                            // one bit per pixel
+        writemonochar(tmp, 0xff, 0xff, 0x00);                           // blue color
+        tmp = newfacemono99[pointer] & 0x08;                            // one bit per pixel
+        writemonochar(tmp, 0xff, 0xff, 0x00);                           // blue color
+        tmp = newfacemono99[pointer] & 0x10;                            // one bit per pixel
+        writemonochar(tmp, 0xff, 0xff, 0x00);                           // blue color
+        tmp = newfacemono99[pointer] & 0x20;                            // one bit per pixel
+        writemonochar(tmp, 0xff, 0xff, 0x00);                           // blue color
+        tmp = newfacemono99[pointer] & 0x40;                            // one bit per pixel
+        writemonochar(tmp, 0xff, 0xff, 0x00);                           // blue color
+        tmp = newfacemono99[pointer] & 0x80;                            // one bit per pixel
+        writemonochar(tmp, 0xff, 0xff, 0x00);                           // blue color
+        pointer-=1;
+
+    }
+
+    write_command(0x29);                                                //display on
+
+
+    //write static texts on the LCD
+
+    iPixC = 16;                                                         //16 pixels horizontal per char
+    iPixR = 20;                                                         //20 pixels vertical per char
+
+    iRows=7;
+    iCols=13;
+    ichar = 'M';
+    charAll(0xff, 0xff, 0xff);                                          //black color
+
+    iCols++;
+    ichar = 'I';
+    charAll(0xff, 0xff, 0xff);                                          //black color
+
+    iCols++;
+    ichar = 'N';
+    charAll(0xff, 0xff, 0xff);                                          //black color
+
+    iRows=4;
+    iCols=3;
+    ichar='L';
+    charAll(0xff, 0xff, 0xff);
+    iCols++;
+    ichar='T';
+    charAll(0xff, 0xff, 0xff);
+    iCols++;
+    ichar='P';
+    charAll(0xff, 0xff, 0xff);
+    iCols++;
+    ichar=':';
+    charAll(0xff, 0xff, 0xff);
+
+    iRows=4;
+    iCols=11;
+    ichar='R';
+    charAll(0xff, 0xff, 0xff);
+    iCols++;
+    ichar='T';
+    charAll(0xff, 0xff, 0xff);
+    iCols++;
+    ichar='P';
+    charAll(0xff, 0xff, 0xff);
+    iCols++;
+    ichar=':';
+    charAll(0xff, 0xff, 0xff);
+
+
+    //write "MODE:" to display CHILD or ADULT
+    LabelAry[0] = 'M';
+    LabelAry[1] = 'O';
+    LabelAry[2] = 'D';
+    LabelAry[3] = 'E';
+    LabelAry[4] = ':';
+
+    iRows=3;
+    for (i=0;i<5;i++) {
+        iCols=3+i;
+        ichar=LabelAry[i];
+        charAll(0xff, 0xff, 0xff);                                      //black color
+    };
+
+    iRows=1;
+    iCols=14;
+    ichar = '%';
+    charAll(0xff, 0xff, 0xff);                                          //black color
+
+    displaytimer=90;                                                    //90 sec LED on
+    write_command(0x29);                                                //display on
+    P3OUT |= (BIT2);                                                    //turn on LLED
+    norewrite=true;
+//    beeper();
+}
+
+void diagscreen(void)
+{
+    unsigned int i;
+    // this section is to display diagnostic page
+    iPixC = 16;                                                         //16 pixels horizontal
+    iPixR = 20;                                                         //20 pixels vertical
+
+    for (i=11;i>0;--i)                                                  //display 1 to 11 number at the left side
+    {
+        iRows=11-i;
+        iCols=0;
+        if (i>9)                                                        //if it is a 2 digit number
+        {
+            ichar=digits[1];                                            //write ms digit
+            charAll(0xff, 0xff, 0xff);
+            iCols +=1;                                                  //write ls digit
+            ichar=digits[i-10];
+            charAll(0xff, 0xff, 0xff);
+        }
+        else                                                            //only one digit
+        {
+            iCols +=1;
+            ichar=digits[i];
+            charAll(0xff, 0xff, 0xff);
+        }
+    }
+
+    for (i=11;i>0;--i)                                                  //display 1 to 11 number at the right side
+    {
+        iRows=11-i;
+        iCols=17;
+        if (i>9)                                                        //if it is a 2 digit number
+        {
+            ichar=digits[1];                                            //write ms digit
+            charAll(0xff, 0xff, 0xff);
+            iCols +=1;                                                  //write ls digit
+            ichar=digits[i-10];
+            charAll(0xff, 0xff, 0xff);
+        }
+        else                                                            //only one digit
+        {
+            iCols +=1;
+            ichar=digits[i];
+            charAll(0xff, 0xff, 0xff);
+        }
+    }
+
+    ichar='L';
+    iRows=11;
+    iCols=1;
+    charAll(0xff, 0xff, 0xff);
+
+    ichar='R';
+    iCols=18;
+    charAll(0xff, 0xff, 0xff);
+    P3OUT |= (BIT2);                                                    // turn on LLED
+
+}
+
+void writetp(void)
+{
+    // write left treatment point to LCD
+    iPixC = 16;                                                         //16 pixels horizontal per char
+    iPixR = 20;                                                         //20 pixels vertical per char
+
+    iRows=4;                                                            //write ms digit of minute
+    iCols=7;
+    writedigits(ltpoint+1,0,0xff,0xff);                                 //red color
+
+    // write right treatment point to LCD
+    iPixC = 16;                                                         //16 pixels horizontal per char
+    iPixR = 20;                                                         //20 pixels vertical per char
+
+    iRows=4;                                                            //write ms digit of minute
+    iCols=15;
+    writedigits(rtpoint+1,0,0xff,0xff);                                 //red color
+
+
+    // write running time to LCD
+    iPixC = 16;                                                         //16 pixels horizontal per char
+    iPixR = 20;                                                         //20 pixels vertical per char
+
+    iRows=6;                                                            //write ms digit of minute
+    iCols=10;
+    writedigits(MIN,0,0xff,0xff);                                       //red color
+
+    iCols+=1;                                                           //write : after minute
+    ichar = ':';
+    charAll(0xff, 0xff, 0xff);                                          //black color
+
+    iCols+=1;                                                           //write ms digit of second
+    writedigits(SEC,0,0xff,0xff);                                       //red color
+
+    // write user selected time to LCD
+    iPixC = 16;                                                         //16 pixels horizontal
+    iPixR = 20;                                                         //20 pixels vertical
+
+    iRows=7;                                                            //write ms digit of minute
+    iCols=10;
+    writedigits(UserMinutes,0xff,0xff,0xff);                            //black color
+    P3OUT |= (BIT2);                                                    // turn on LLED
+
+}
+
+void timeout(void)
+{
+    powerup=true;                                                       // power off mode
+    UserMinutes = 0;
+    voltageoff();
+    beeper();
+    EnterSleep();                                                       // display OFF
+    P1IE  = 0x7F;                                                       // 0-6 inputs interrupt enabled
+    __bis_SR_register(LPM3_bits+GIE);                                   // enter LPM3 mode
+    while(1);
+
+}
+
+int main(void)
+{
+    int     tmpswitch;
 
 startup:
     WDTCTL = WDTPW | WDTHOLD;                                           // stop watchdog timer
@@ -1371,345 +1765,178 @@ startup:
 
     initi();                                                            // initial LCD screen
 
+    // After Init:
+    // powerison = 1
+    // UserMinutes = 0
+    // norewrite=false
+    // rdbattery=true;
+    // displaytimer=90;
+    // extmode=false;
+    // scanit = false;
+    // scanning = false;
+
     while(1)
     {
-        if(powerison==1)
+        if(powerup==true)
         {
-            if(UserMinutes == 0)
+            powerup=false;
+
+            if(previousstate == 0)                                      // re-display last scan
             {
-                if((RUP==0) && (LUP==0))
-                {
-                    MIN = 0;
-                    SEC = 0;
-                }
+                powerison=1;
+                norewrite=false;
+                displaytimer=90;
             }
 
-            if(UserMinutes > MIN)
+            if(previousstate == 1)                                      // re-display last scan
             {
-                if(callclock)                                           // 0.5 sec
-                {
-                    if(LUP > 0)
-                    {
-                        leftsetvoltage(LUP);
-                    }
-                    if(RUP > 0)
-                    {
-                        rightsetvoltage(RUP);
-                    }
-                    if((LUP>0) || (RUP>0))
-                    {
-                        pulsexfmr();                                    // P2.4,5 to strobe LHVTRIG and HVTRIG
-                        voltageoff();
-                        callclock=false;
-
-                    }
-                }
-                displaytimer = 90;
+                powerison=1;
+                norewrite=false;
+                displaytimer=90;
             }
 
-            if(UserMinutes == MIN)
+            if(previousstate == 2)                                      // re-display last scan
             {
-                MIN = UserMinutes;
-                SEC = 0;
-                if(displaytimer==0)
-                {
-                    llastp4 = 0;
-                    rlastp4 = 0;
-                    powerison=0;                                        // power off mode
-                    voltageoff();
-                    beeper();
-                    EnterSleep();                                       // display OFF
-                    P1IE  = 0x7F;                                       // 0-6 inputs interrupt
-                    __bis_SR_register(LPM3_bits+GIE);                   // enter LPM3 mode
-                    while(1);
-                }
-            }
+                powerison=2;
+                blankscreen();
 
-            if(rdbattery)                                               // read the battery value
-            {
-                scanadc(INCH_7);                                        // return value in ADCValue
-                BATValue = ADCValue;                                    // save value in BATValue
-            }
+                diagscreen();
 
-            if(rewritescreen==true)
-            {
-                write_command(0x2A); //
-                write_data(0x00);
-                write_data(0x00);
-                write_data(0x01);
-                write_data(0x3F);
+                P3OUT |= (BIT2);                                        // turn on LLED
+                scanit = false;
 
-                write_command(0x2B); //
-                write_data(0x00);
-                write_data(0x00);
-                write_data(0x00);
-                write_data(0xEF);
+                printbars();
 
-                //**********************
-                write_command(0x29);                                    //display on
-                write_command(0x2C);                                    //RAM write control
-
-                pointer = 9599;
-
-                for(intii=9600;intii>0;intii--)                         // 16 character 20 pixels= 320 columns
-                {
-                    tmp = newfacemono99[pointer] & 0x01;                // one bit per pixel
-                    writemonochar(tmp, 0xff, 0xff, 0x00);               // blue color
-                    tmp = newfacemono99[pointer] & 0x02;                // one bit per pixel
-                    writemonochar(tmp, 0xff, 0xff, 0x00);               // blue color
-                    tmp = newfacemono99[pointer] & 0x04;                // one bit per pixel
-                    writemonochar(tmp, 0xff, 0xff, 0x00);               // blue color
-                    tmp = newfacemono99[pointer] & 0x08;                // one bit per pixel
-                    writemonochar(tmp, 0xff, 0xff, 0x00);               // blue color
-                    tmp = newfacemono99[pointer] & 0x10;                // one bit per pixel
-                    writemonochar(tmp, 0xff, 0xff, 0x00);               // blue color
-                    tmp = newfacemono99[pointer] & 0x20;                // one bit per pixel
-                    writemonochar(tmp, 0xff, 0xff, 0x00);               // blue color
-                    tmp = newfacemono99[pointer] & 0x40;                // one bit per pixel
-                    writemonochar(tmp, 0xff, 0xff, 0x00);               // blue color
-                    tmp = newfacemono99[pointer] & 0x80;                // one bit per pixel
-                    writemonochar(tmp, 0xff, 0xff, 0x00);               // blue color
-                    pointer-=1;
-
-                }
-
-                write_command(0x29);                                    //display on
-
-
-                //write static texts on the LCD
-
-                iPixC = 16;                                             //16 pixels horizontal per char
-                iPixR = 20;                                             //20 pixels vertical per char
-
-                iRows=7;
-                iCols=13;
-                ichar = 'M';
-                charAll(0xff, 0xff, 0xff);                              //black color
-
-                iCols++;
-                ichar = 'I';
-                charAll(0xff, 0xff, 0xff);                              //black color
-
-                iCols++;
-                ichar = 'N';
-                charAll(0xff, 0xff, 0xff);                              //black color
-
-                iRows=4;
-                iCols=3;
-                ichar='L';
-                charAll(0xff, 0xff, 0xff);
-                iCols++;
-                ichar='T';
-                charAll(0xff, 0xff, 0xff);
-                iCols++;
-                ichar='P';
-                charAll(0xff, 0xff, 0xff);
-                iCols++;
-                ichar=':';
-                charAll(0xff, 0xff, 0xff);
-
-                iRows=4;
-                iCols=11;
-                ichar='R';
-                charAll(0xff, 0xff, 0xff);
-                iCols++;
-                ichar='T';
-                charAll(0xff, 0xff, 0xff);
-                iCols++;
-                ichar='P';
-                charAll(0xff, 0xff, 0xff);
-                iCols++;
-                ichar=':';
-                charAll(0xff, 0xff, 0xff);
-
-
-                //write "MODE:" to display CHILD or ADULT
-                LabelAry[0] = 'M';
-                LabelAry[1] = 'O';
-                LabelAry[2] = 'D';
-                LabelAry[3] = 'E';
-                LabelAry[4] = ':';
-
-                iRows=3;
-                for (i=0;i<5;i++) {
-                    iCols=3+i;
-                    ichar=LabelAry[i];
-                    charAll(0xff, 0xff, 0xff);                          //black color
-                };
-
-                iRows=1;
-                iCols=14;
-                ichar = '%';
-                charAll(0xff, 0xff, 0xff);                              //black color
-
-                displaytimer=90;                                        //90 sec LED on
-                write_command(0x29);                                    //display on
-                P3OUT |= (BIT2);                                        //turn on LLED
-                rewritescreen=false;
                 beeper();
+                displaytimer = 120;
             }
 
-            // write left treatment point to LCD
-            iPixC = 16;                                                 //16 pixels horizontal per char
-            iPixR = 20;                                                 //20 pixels vertical per char
-
-            iRows=4;                                                    //write ms digit of minute
-            iCols=7;
-            writedigits(ltpoint,0,0xff,0xff);                           //red color
-
-            // write right treatment point to LCD
-            iPixC = 16;                                                 //16 pixels horizontal per char
-            iPixR = 20;                                                 //20 pixels vertical per char
-
-            iRows=4;                                                    //write ms digit of minute
-            iCols=15;
-            writedigits(rtpoint,0,0xff,0xff);                           //red color
-
-
-            // write running time to LCD
-            iPixC = 16;                                                 //16 pixels horizontal per char
-            iPixR = 20;                                                 //20 pixels vertical per char
-
-            iRows=6;                                                    //write ms digit of minute
-            iCols=10;
-            writedigits(MIN,0,0xff,0xff);                               //red color
-
-            iCols+=1;                                                   //write : after minute
-            ichar = ':';
-            charAll(0xff, 0xff, 0xff);                                  //black color
-
-            iCols+=1;                                                   //write ms digit of second
-            writedigits(SEC,0,0xff,0xff);                               //red color
-
-            // write user selected time to LCD
-            iPixC = 16;                                                 //16 pixels horizontal
-            iPixR = 20;                                                 //20 pixels vertical
-
-            iRows=7;                                                    //write ms digit of minute
-            iCols=10;
-            writedigits(UserMinutes,0xff,0xff,0xff);                    //black color
-
-            //display battery percent
-            if(BATValue > 449)
+        }
+        else
+        {
+            if(powerison==1)
             {
-                BATValue = 449;
-            }
+                previousstate = 1;
+                if(UserMinutes == 0)
+                {
+                    if((RUP==0) && (LUP==0))
+                    {
+                        MIN = 0;
+                        SEC = 0;
+                    }
+                }
 
-            if(BATValue < 300)
-            {
-                BatPcnt = 0;
-            }
-            else
-            {
-                BatPcnt = BATValue - 300;
-            }
+                if(UserMinutes > MIN)
+                {
+                    if(callclock)                                       // 0.5 sec
+                    {
+                        if(LUP > 0)
+                        {
+                            leftsetvoltage(LUP);                        // changes P4, Strobe LVSEL
+                            leftselchan(ltpoint+1);                     // changes P4, Strobe LVSEL
+                        }
+                        if(RUP > 0)
+                        {
+                            rightsetvoltage(RUP);                       // changes P4, Strobe RVSEL
+                            rightselchan(rtpoint+1);                    // changes P4, Strobe LVSEL
+                        }
+                        if((LUP>0) || (RUP>0))
+                        {
+                            delay0(50);
+                            pulsexfmr();                                // P2.4,5 to strobe LHVTRIG and HVTRIG
+                            voltageoff();                               // changes P4, Strobe LVSEL,RVSEL
+                            callclock=false;
+                        }
+                    }
+                    displaytimer = 90;                                  // this will keep display on
+                }
 
-            BatPcnt = BatPcnt * 100;
-            BatPcnt = BatPcnt / 150;
+                if(UserMinutes == MIN)
+                {
+                    voltageoff();                                       // changes P4, Strobe LVSEL,RVSEL
+                    MIN = UserMinutes;
+                    SEC = 0;
+                    if(displaytimer==0)
+                    {
+                        previousstate = 1;
+                        timeout();
+                    }
+                }
 
-            iRows=1;                                                    //write to LCD
-            iCols=11;
-            if(BatPcnt < 10)
-            {
-                writedigits(BatPcnt,0,0xff,0xff);                       //red color
-            }
-            else
-            {
-                writedigits(BatPcnt,0xff,0xff,0);                       //green color
-            }
-        } //if(powerison==1)
+                if(rdbattery)                                           // read the battery value
+                {
+                    scanadc(INCH_7);                                    // return value in ADCValue
+                    BATValue = ADCValue;                                // save value in BATValue
+                }
+
+                if(norewrite==false)
+                {
+                    rewritescr();
+                    displaytimer=90;
+                }
+
+                writetp();
+
+                //display battery percent
+                if(BATValue > 449)
+                {
+                    BATValue = 449;
+                }
+
+                if(BATValue < 300)
+                {
+                    BatPcnt = 0;
+                }
+                else
+                {
+                    BatPcnt = BATValue - 300;
+                }
+
+                BatPcnt = BatPcnt * 100;
+                BatPcnt = BatPcnt / 150;
+
+                iRows=1;                                                //write to LCD
+                iCols=11;
+                if(BatPcnt < 10)
+                {
+                    writedigits(BatPcnt,0,0xff,0xff);                   //red color
+                }
+                else
+                {
+                    writedigits(BatPcnt,0xff,0xff,0);                   //green color
+                }
+
+                writechild();
+                writeintensity();
+            } //if(powerison==1)
+        }
 
         if(scanit == true)
         {
             scanit = false;
 
-            iRows=4;
-            iCols=3;
-            ichar='S';
-            charAll(0, 0xff, 0xff);
-            iCols++;
-            ichar='C';
-            charAll(0, 0xff, 0xff);
-            iCols++;
-            ichar='A';
-            charAll(0, 0xff, 0xff);
-            iCols++;
-            ichar='N';
-            charAll(0, 0xff, 0xff);
-            iCols++;
-            ichar='N';
-            charAll(0, 0xff, 0xff);
-            iCols++;
-            ichar='I';
-            charAll(0, 0xff, 0xff);
-            iCols++;
-            ichar='N';
-            charAll(0, 0xff, 0xff);
-            iCols++;
-            ichar='G';
-            charAll(0, 0xff, 0xff);
-            iCols++;
-            ichar=' ';
-            charAll(0, 0xff, 0xff);
-            iCols++;
-            ichar='W';
-            charAll(0, 0xff, 0xff);
-            iCols++;
-            ichar='A';
-            charAll(0, 0xff, 0xff);
-            iCols++;
-            ichar='I';
-            charAll(0, 0xff, 0xff);
-            iCols++;
-            ichar='T';
-            charAll(0, 0xff, 0xff);
+            printscanning();
 
-            scanhand();
+//            while(1)
+//            {
+                scanhand();
+//            }
 
-            iPixC = 16;                                                 //16 pixels horizontal
-            iPixR = 20;                                                 //20 pixels vertical
+            printbars();
 
-            ichar='Z';
-            for (i=0;i<11;i++)                                          //display left hand scan result
-            {
-                iRows=10-i;
-                ichar=' ';
-                iCols=2;
-                for (j=0;j<15;j++)
-                {
-                    charAll(0xff, 0xff, 0xff);
-                    iCols+=1;
-                }
-                ichar='Z';
-                iCols=2;
-                for (j=0;j<leftbar[i];j++)
-                {
-                    charAll(0xff, 0xff, 0xff);
-                    iCols+=1;
-                }
-            }
-
-            for (i=0;i<11;i++)                                          //display right hand scan result
-            {
-                iRows=10-i;
-                ichar=' ';
-                iCols=8;                                               //last col is 18
-                for (j=0;j<7;j++)
-                {
-                    charAll(0xff, 0xff, 0xff);
-                    iCols+=1;
-                }
-                ichar='Z';
-                iCols=17-rightbar[i];
-                for (j=0;j<rightbar[i];j++)
-                {
-                    charAll(0xff, 0xff, 0xff);
-                    iCols+=1;
-                }
-            }
-            displaytimer = 180;
+            beeper();
+            previousstate = 2;
+            displaytimer = 120;
         } //if(scanit == true)
 
+        if(powerison==2)
+        {
+            if(displaytimer == 0)
+            {
+                previousstate=2;
+                timeout();
+            }
+        }
 
         if(hasswitch>0)
         {
@@ -1717,12 +1944,8 @@ startup:
             while(tmpswitch != P1IN )
             {
                 tmpswitch = P1IN;
-                delay2(50);                                             // debounce delay
+                delay2(150);                                            // debounce delay in ms
             }
-//            while(P1IN != 0x7f)
-//            {
-//                delay2(50);
-//            }
             switchcnt = 1000;
 
             hasswitch=0;
@@ -1733,41 +1956,49 @@ startup:
         {
             haskey=false;
             displaytimer=90;
-            if((SwitchData & BIT0) == 0)                            // minute switch pressed
+            if((SwitchData & BIT0) == 0)                                // minute switch pressed
             {
-                SwitchData = P1IN & BIT0;                       // check for continuous pressing of power switch
-                while(SwitchData == 0)                          // wait for switch to go back up
+                SwitchData = P1IN & BIT0;                               // check for continuous pressing of power switch
+                while(SwitchData == 0)                                  // wait for switch to go back up
                 {
                     SwitchData = P1IN & BIT0;
                 }
                 SwitchData=0xff;
 
-                UserMinutes += 15;                                  // add 15 minutes
+                if(switchcnt == 0)                                      // recall scan
+                {
+                    powerison = 2;
+                    powerup =  true;
+                    previousstate = 2;
+                    goto startup;
+                }
+
+                UserMinutes += 15;                                      // add 15 minutes
                 if(UserMinutes>90)
                 {
                     UserMinutes=0;
                 }// wrap around
-                P3OUT |= (BIT2);                                    // turn on LLED
+                P3OUT |= (BIT2);                                        // turn on LLED
                 beeper();
             } //if((SwitchData & BIT0) == 0)
 
-            if((SwitchData & BIT1) == 0)                            // CHILD switch pressed
+            if((SwitchData & BIT1) == 0)                                // CHILD switch pressed
             {
-                SwitchData = P1IN & BIT1;                           // check for continuous pressing of child switch
-                while(SwitchData == 0)                              // wait for switch to go back up
+                SwitchData = P1IN & BIT1;                               // check for continuous pressing of child switch
+                while(SwitchData == 0)                                  // wait for switch to go back up
                 {
                     SwitchData = P1IN & BIT1;
                 }
                 SwitchData=0xff;
 
-                if(switchcnt == 0)                                  // time out? extended mode
+                if(switchcnt == 0)                                      // time out? extended mode
                 {
                     extmode = true;
                     writechild();
                 }
                 else
                 {
-                    if(extmode == true)                             // in extmode, press child again turn off extmode
+                    if(extmode == true)                                 // in extmode, press child again turn off extmode
                     {
                         extmode = false;
                         writechild();
@@ -1775,21 +2006,21 @@ startup:
                     else
                     {
                         CHILD +=1;
-                        if(CHILD >2)
+                        if(CHILD >1)
                         {
-                            CHILD=1;
+                            CHILD=0;
                         }
                         writechild();
                     }
                 }
-                P3OUT |= (BIT2);                                    // turn on LLED
+                P3OUT |= (BIT2);                                        // turn on LLED
                 beeper();
             } //if((SwitchData & BIT1) == 0)
 
-            if((SwitchData & BIT2) == 0)                            // Left Up switch pressed (BIT2)
+            if((SwitchData & BIT2) == 0)                                // Left Up switch pressed (BIT2)
             {
-                SwitchData = P1IN & BIT2;                       // check for continuous pressing of power switch
-                while(SwitchData == 0)                          // wait for switch to go back up
+                SwitchData = P1IN & BIT2;                               // check for continuous pressing of power switch
+                while(SwitchData == 0)                                  // wait for switch to go back up
                 {
                     SwitchData = P1IN & BIT2;
                 }
@@ -1798,33 +2029,32 @@ startup:
                 if(extmode == true)
                 {
                     ltpoint +=1;
-                    if(ltpoint>11)
-                        ltpoint=1;
-                    leftselchan(ltpoint);
+                    if(ltpoint>10)                                      // VER5 init ltpoint to 0
+                        ltpoint=0;
                 }
                 else
                 {
                     LUP += 1;
-                    if(CHILD==2)
+                    if(CHILD==1)
                     {
                         if(LUP>14)
                             LUP=14;
                     }
-                    if(CHILD==1)
+                    if(CHILD==0)
                     {
                         if(LUP>7)
                             LUP=7;
                     }
                     writeintensity();
                 }
-                P3OUT |= (BIT2);                                    // turn on LLED
+                P3OUT |= (BIT2);                                        // turn on LLED
                 beeper();
             } //if((SwitchData & BIT2) == 0)
 
-            if((SwitchData & BIT3) == 0)                            // Right Up switch pressed (BIT3)
+            if((SwitchData & BIT3) == 0)                                // Right Up switch pressed (BIT3)
             {
-                SwitchData = P1IN & BIT3;                       // check for continuous pressing of power switch
-                while(SwitchData == 0)                          // wait for switch to go back up
+                SwitchData = P1IN & BIT3;                               // check for continuous pressing of power switch
+                while(SwitchData == 0)                                  // wait for switch to go back up
                 {
                     SwitchData = P1IN & BIT3;
                 }
@@ -1833,33 +2063,32 @@ startup:
                 if(extmode == true)
                 {
                     rtpoint +=1;
-                    if(rtpoint>11)
-                        rtpoint=1;
-                    rightselchan(rtpoint);
+                    if(rtpoint>10)                                      // VER5 init rtpoint to 0
+                        rtpoint=0;
                 }
                 else
                 {
                     RUP += 1;
-                    if(CHILD==2)
+                    if(CHILD==1)
                     {
                         if(RUP>14)
                             RUP=14;
                     }
-                    if(CHILD==1)
+                    if(CHILD==0)
                     {
                         if(RUP>7)
                             RUP=7;
                     }
                     writeintensity();
                 }
-                P3OUT |= (BIT2);                                    // turn on LLED
+                P3OUT |= (BIT2);                                        // turn on LLED
                 beeper();
             } //if((SwitchData & BIT3) == 0)
 
-            if((SwitchData & BIT4) == 0)                            // Left Down switch pressed
+            if((SwitchData & BIT4) == 0)                                // Left Down switch pressed
             {
-                SwitchData = P1IN & BIT4;                       // check for continuous pressing of power switch
-                while(SwitchData == 0)                          // wait for switch to go back up
+                SwitchData = P1IN & BIT4;                               // check for continuous pressing of power switch
+                while(SwitchData == 0)                                  // wait for switch to go back up
                 {
                     SwitchData = P1IN & BIT4;
                 }
@@ -1867,11 +2096,10 @@ startup:
 
                 if(extmode == true)
                 {
-                    if(ltpoint>1)
+                    if(ltpoint>0)                                      // VER5 init ltpoint to 0
                     {
                         ltpoint -=1;
                     }
-                    leftselchan(ltpoint);
                 }
                 else
                 {
@@ -1881,14 +2109,14 @@ startup:
                     }
                     writeintensity();
                 }
-                P3OUT |= (BIT2);                                    // turn on LLED
+                P3OUT |= (BIT2);                                        // turn on LLED
                 beeper();
             } //if((SwitchData & BIT4) == 0)
 
-            if((SwitchData & BIT5) == 0)                            // Right Down switch pressed
+            if((SwitchData & BIT5) == 0)                                // Right Down switch pressed
             {
-                SwitchData = P1IN & BIT5;                       // check for continuous pressing of power switch
-                while(SwitchData == 0)                          // wait for switch to go back up
+                SwitchData = P1IN & BIT5;                               // check for continuous pressing of power switch
+                while(SwitchData == 0)                                  // wait for switch to go back up
                 {
                     SwitchData = P1IN & BIT5;
                 }
@@ -1896,11 +2124,10 @@ startup:
 
                 if(extmode == true)
                 {
-                    if(rtpoint>1)
+                    if(rtpoint>0)                                       // VER5 init rtpoint to 0
                     {
                         rtpoint -=1;
                     }
-                    rightselchan(rtpoint);
                 }
                 else
                 {
@@ -1910,122 +2137,49 @@ startup:
                     }
                     writeintensity();
                 }
-                P3OUT |= (BIT2);                                    // turn on LLED
+                P3OUT |= (BIT2);                                        // turn on LLED
                 beeper();
             } //if((SwitchData & BIT5) == 0)
 
-            if((SwitchData & BIT6) == 0)                            // Power Switch pressed (BIT6)
+            if((SwitchData & BIT6) == 0)                                // Power Switch pressed (BIT6)
             {
-                SwitchData = P1IN & BIT6;                       // check for continuous pressing of power switch
-                while(SwitchData == 0)                          // wait for switch to go back up
+                SwitchData = P1IN & BIT6;                               // check for continuous pressing of power switch
+                while(SwitchData == 0)                                  // wait for switch to go back up
                 {
                     SwitchData = P1IN & BIT6;
                 }
                 SwitchData=0xff;
 
-                if(powerison==0)                                    // was in power down mode, so restart
-                {
-//                    beeper();
-                    delay(500);
-                    goto startup;
-                }
-
                 if(powerison==2)
                 {
-                    llastp4 = 0;
-                    rlastp4 = 0;
-                    powerison=0;                                    // power off mode
-                    UserMinutes = 0;
-                    voltageoff();
-                    beeper();
-                    EnterSleep();                               // display OFF
-                    P1IE  = 0x7F;                                   // 0-6 inputs interrupt
-                    __bis_SR_register(LPM3_bits+GIE);               // enter LPM3 mode
-                    while(1);
+                    powerison=1;
+                    previousstate=1;
+                    timeout();
                 }
 
                 if(powerison==1)
                 {
-                    if(switchcnt == 0)                              // time out?
+                    if(switchcnt == 0)                                  // time out?
                     {
-                        powerison = 2;                              // set to scan mode
+                        powerison = 2;                                  // set to scan mode
                         extmode = false;
                         beeper();
                         blankscreen();
 
-                        // this section is to display diagnostic page
-                        iPixC = 16;                                 //16 pixels horizontal
-                        iPixR = 20;                                 //20 pixels vertical
-
-                        for (i=11;i>0;--i)                          //display 1 to 11 number at the left side
-                        {
-                            iRows=11-i;
-                            iCols=0;
-                            if (i>9)                                //if it is a 2 digit number
-                            {
-                                ichar=digits[1];                    //write ms digit
-                                charAll(0xff, 0xff, 0xff);
-                                iCols +=1;                          //write ls digit
-                                ichar=digits[i-10];
-                                charAll(0xff, 0xff, 0xff);
-                            }
-                            else                                    //only one digit
-                            {
-                                iCols +=1;
-                                ichar=digits[i];
-                                charAll(0xff, 0xff, 0xff);
-                            }
-                        }
-
-                        for (i=11;i>0;--i)                          //display 1 to 11 number at the right side
-                        {
-                            iRows=11-i;
-                            iCols=17;
-                            if (i>9)                                //if it is a 2 digit number
-                            {
-                                ichar=digits[1];                    //write ms digit
-                                charAll(0xff, 0xff, 0xff);
-                                iCols +=1;                          //write ls digit
-                                ichar=digits[i-10];
-                                charAll(0xff, 0xff, 0xff);
-                            }
-                            else                                    //only one digit
-                            {
-                                iCols +=1;
-                                ichar=digits[i];
-                                charAll(0xff, 0xff, 0xff);
-                            }
-                        }
-
-                        ichar='L';
-                        iRows=11;
-                        iCols=1;
-                        charAll(0xff, 0xff, 0xff);
-
-                        ichar='R';
-                        iCols=18;
-                        charAll(0xff, 0xff, 0xff);
-
-                        displaytimer=180;
+                        diagscreen();
+                        displaytimer=120;
                         P3OUT |= (BIT2);                                // turn on LLED
                         scanit = true;
                     }
                     else
                     {
-                        llastp4 = 0;
-                        rlastp4 = 0;
-                        powerison=0;                                    // power off mode
-                        voltageoff();
-                        beeper();
-                        EnterSleep();                                   // display OFF
-                        P1IE  = 0x7F;                                   // 0-6 inputs interrupt
-                        __bis_SR_register(LPM3_bits+GIE);               // enter LPM3 mode
-                        while(1);
+                        previousstate = 1;
+                        timeout();
                     }
                 } //if(powerison==1)
             } //if((SwitchData & BIT6) == 0)
             SwitchData = 0xff;
-            P1IE  = 0x7F;                                               // enable 0-6 inputs interrupt
+            P1IE  = 0x7F;                                               // enable 0-6 inputs interrupt enabled
         } //if(haskey)
     } //while(1)
  } //main
