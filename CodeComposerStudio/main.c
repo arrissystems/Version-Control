@@ -39,6 +39,8 @@ int     lscanvt;                                                        // scan 
 int     rscanvt;                                                        // scan voltage
 #define arrayj  8                                                       // 8, 4, 2 VER3
 #define arrayc  3                                                       // 3, 2, 1 VER3
+#define llimit  20
+#define rlimit  20
 
 int main(void);
 void timeout(void);
@@ -59,6 +61,8 @@ unsigned int rightscanchan(void);
 void leftselchan(int bii);
 void rightselchan(int bii);
 void writeintensity(void);
+void leftsetvoltage(int volt);
+void rightsetvoltage(int volt);
 
 // RTC variables
 int         TSEC;
@@ -72,8 +76,10 @@ int         SwitchData;
 int         powerison;
 int         previousstate;
 bool        powerup;
+bool        needbeep;
 bool        haskey;
 bool        rdbattery;
+bool        needsetvoltage;
 int         dlycnt0;
 int         dlycnt1;
 int         dlycnt2;
@@ -116,8 +122,8 @@ int         leftadcval;
 int         rightadcval;
 int         leftmax;
 int         rightmax;
-int         leftbar[11];
-int         rightbar[11];
+int         leftbar[12];
+int         rightbar[12];
 int         leftadcarray[13][arrayj];                                   // VER3
 int         rightadcarray[13][arrayj];                                  // VER3
 int         leftarray[13];
@@ -571,9 +577,7 @@ __interrupt void myport1_isr(void)
     }
     else
     {
-        p1iflag = P1IFG;
         SwitchData = ~P1IFG;
-
     }
     hasswitch+=1;
     P1IFG = 0;                                                          // clear interrupt flags
@@ -909,7 +913,7 @@ unsigned int    i, j, k;
     iCols=1;
     if(CHILD==1)                                                        // VER5 init CHILD to 0
     {
-        j=LUP>>1;
+        j=LUP>>1;                                                       // show half values
     }
     for (i=0;i<7;i++)
     {
@@ -929,7 +933,7 @@ unsigned int    i, j, k;
     iCols=18;
     if(CHILD==1)                                                        // VER5 init CHILD to 0
     {
-        k=RUP>>1;
+        k=RUP>>1;                                                       // show half values
     }
     for (i=0;i<7;i++)
     {
@@ -953,17 +957,19 @@ void    pulsexfmr (void)
 {
     if(powerison==1)
     {
-        if(LUP>0)
+        if((LUP>0) && (ltpoint>0))
         {
             P2OUT |= (BIT4);                                            // turn on LHVTRIG
         }
-        if(RUP>0)
+        if((RUP>0) && (rtpoint>0))
         {
             P2OUT |= (BIT5);                                            // turn on RHVTRIG
         }
-
-        sdelay(750);
-        P2OUT &= ~(BIT4+BIT5);                                          // turn P2.4,5 off
+        if((LUP>0) || (RUP>0))
+        {
+            sdelay(750);
+            P2OUT &= ~(BIT4+BIT5);                                      // turn P2.4,5 off
+        }
     }
 }
 
@@ -1000,11 +1006,9 @@ void rightsetvoltage(int volt)
 void leftselchan(int bii)
 {
     int    aii;
-    int    bii1;
-    bii1=bii+2;
 
 //    P4OUT &= ~(BIT5 + BIT6);                                          // turn off Din, CLK
-    P4OUT = llastp4;                                                    // turn off Din, CLK
+    P4OUT = llastp4 & 0x1f;                                             // turn off Din, CLK
     P4OUT |= (BIT7);                                                    // clear the shift register
     P3OUT |= (BIT3);                                                    // strobe the LVSEL
     sdelay(3);
@@ -1015,7 +1019,7 @@ void leftselchan(int bii)
     sdelay(3);
     P3OUT &= ~(BIT3);
 
-    for(aii=0; aii<bii1; aii++)
+    for(aii=0; aii<=bii; aii++)
     {
         if(aii==0)
         {
@@ -1052,10 +1056,8 @@ unsigned int leftscanchan(void)
 void rightselchan(int bii)
 {
     int    aii;
-    int    bii1;
-    bii1=bii+2;
 //    P4OUT &= ~(BIT5 + BIT6);                                          // turn off Din, CLK
-    P4OUT = rlastp4;
+    P4OUT = rlastp4 & 0x1f;
     P4OUT |= (BIT7);                                                    // clear the shift register
     P3OUT |= (BIT4);                                                    // strobe the RVSEL
     sdelay(3);
@@ -1066,7 +1068,7 @@ void rightselchan(int bii)
     sdelay(3);
     P3OUT &= ~(BIT4);
 
-    for(aii=0; aii<bii1; aii++)
+    for(aii=0; aii<=bii; aii++)
     {
         if(aii==0)
         {
@@ -1128,7 +1130,7 @@ void scanhand(void)
         leftmin=2048;
         leftave=0;
 
-        for(i=0; i<11; i++)
+        for(i=1; i<12; i++)
         {
             leftselchan(i);                                             // changes P4, strobe LVSEL
             delay0(setdly);                                             // suppress leading edge spike
@@ -1142,7 +1144,7 @@ void scanhand(void)
                 leftmin=leftarray[i];
         }
 
-        if((leftmax - leftmin) > 11)
+        if((leftmax - leftmin) > llimit)
         {
             break;
         }
@@ -1161,7 +1163,7 @@ void scanhand(void)
         rightmin=2048;
         rightave=0;
 
-        for(i=0; i<11; i++)
+        for(i=1; i<12; i++)
         {
             rightselchan(i);                                            // changes P4, strobe RVSEL
             delay0(setdly);                                             // suppress leading edge spike
@@ -1175,7 +1177,7 @@ void scanhand(void)
                 rightmin=rightarray[i];
         }
 
-        if((rightmax - rightmin) > 11)
+        if((rightmax - rightmin) > rlimit)
         {
             break;
         }
@@ -1210,10 +1212,8 @@ void scanhand(void)
 
     for(j=0;j<arrayj;j++)                                               // VER3
     {
-        for(i=0;i<11;i++)
+        for(i=1;i<12;i++)
         {
-            leftadcarray[i][j]=0;
-            rightadcarray[i][j]=0;
             leftselchan(i);                                             // changes P4, strobe LVSEL
             rightselchan(i);                                            // changes P4, strobe RVSEL
             delay0(setdly);                                             // suppress leading edge spike
@@ -1238,7 +1238,7 @@ void scanhand(void)
     rightmin=2048;
     rightave=0;
 
-    for(i=0;i<11;i++)
+    for(i=1;i<12;i++)
     {
         leftarray[i]=0;
         rightarray[i]=0;
@@ -1302,7 +1302,7 @@ void scanhand(void)
         rightrange = 0x7fff;
     }
 
-    for (i=0;i<11;++i)                                                  //get values from adc
+    for (i=1;i<12;++i)                                                  //get values from adc
     {
         ltmp=leftarray[i]-leftave;
         ltmp = ltmp*7;
@@ -1379,8 +1379,8 @@ int Init(void)
     P4DIR = 0xFF;                                                       // Set P4 to output direction
 //    P4REN |= (BIT0 + BIT1 + BIT2 + BIT3 + BIT4 + BIT5 + BIT6 + BIT7); // Set P2.0,1,2,3,4,5,6,7 to pull ups
 //    P4SEL2 = 0x00;                                                    // Turn off capacitive sensing
-    llastp4=0;
-    rlastp4=0;
+//    llastp4=0;
+//    rlastp4=0;
     P4OUT=0x00;                                                         // reset the two 373 latches
 //    P4OUT=0x11;                                                       // reset the two 373 latches enable regulators
     P3OUT|= (BIT3);                                                     // strobe the LVSEL
@@ -1400,6 +1400,8 @@ int Init(void)
     TSEC=0;
     SEC=0;
     MIN=0;
+    UserMinutes=0;
+    needsetvoltage=true;
     powerison=1;
     dlycnt0=0;
     dlycnt1=0;
@@ -1410,7 +1412,6 @@ int Init(void)
     haskey=false;
     ADCDone=true;
     rdbattery=true;
-    p1iflag=0;
     beeperon=false;
     displaytimer=90;
     switchcnt=0;
@@ -1480,9 +1481,9 @@ void printbars(void)
 //  Blank bar areas
 //
     ichar='Z';
-    for (i=0;i<11;i++)                                                  //display left hand scan result
+    for (i=1;i<12;i++)                                                  //display left hand scan result
     {
-        iRows=10-i;
+        iRows=11-i;
         ichar=' ';
         iCols=2;
         for (j=0;j<15;j++)
@@ -1493,9 +1494,9 @@ void printbars(void)
     }
 
     ichar='Z';
-    for (i=0;i<11;i++)                                                  //display left hand scan result
+    for (i=1;i<12;i++)                                                  //display left hand scan result
     {
-        iRows=10-i;
+        iRows=11-i;
         iCols=2;
         for (j=0;j<leftbar[i];j++)
         {
@@ -1631,8 +1632,6 @@ void rewritescr(void)
     charAll(0xff, 0xff, 0xff);                                          //black color
 
     displaytimer=90;                                                    //90 sec LED on
-    write_command(0x29);                                                //display on
-    P3OUT |= (BIT2);                                                    //turn on LLED
     norewrite=true;
 //    beeper();
 }
@@ -1692,8 +1691,6 @@ void diagscreen(void)
     ichar='R';
     iCols=18;
     charAll(0xff, 0xff, 0xff);
-    P3OUT |= (BIT2);                                                    // turn on LLED
-
 }
 
 void writetp(void)
@@ -1704,7 +1701,7 @@ void writetp(void)
 
     iRows=4;                                                            //write ms digit of minute
     iCols=7;
-    writedigits(ltpoint+1,0,0xff,0xff);                                 //red color
+    writedigits(ltpoint,0,0xff,0xff);                                 //red color
 
     // write right treatment point to LCD
     iPixC = 16;                                                         //16 pixels horizontal per char
@@ -1712,7 +1709,7 @@ void writetp(void)
 
     iRows=4;                                                            //write ms digit of minute
     iCols=15;
-    writedigits(rtpoint+1,0,0xff,0xff);                                 //red color
+    writedigits(rtpoint,0,0xff,0xff);                                 //red color
 
 
     // write running time to LCD
@@ -1737,14 +1734,14 @@ void writetp(void)
     iRows=7;                                                            //write ms digit of minute
     iCols=10;
     writedigits(UserMinutes,0xff,0xff,0xff);                            //black color
-    P3OUT |= (BIT2);                                                    // turn on LLED
-
 }
 
 void timeout(void)
 {
     powerup=true;                                                       // power off mode
-    UserMinutes = 0;
+    UserMinutes=0;
+    MIN=0;
+    SEC=0;
     voltageoff();
     beeper();
     EnterSleep();                                                       // display OFF
@@ -1758,16 +1755,20 @@ int main(void)
 {
     int     tmpswitch;
 
-startup:
+//startup:
     WDTCTL = WDTPW | WDTHOLD;                                           // stop watchdog timer
     if(Init()>0)return 1;
     _enable_interrupt();
 
     initi();                                                            // initial LCD screen
+    beeper();
 
     // After Init:
     // powerison = 1
     // UserMinutes = 0
+    // MIN=0
+    // SEC=0
+    // needsetvoltage=true
     // norewrite=false
     // rdbattery=true;
     // displaytimer=90;
@@ -1784,6 +1785,9 @@ startup:
             if(previousstate == 0)                                      // re-display last scan
             {
                 powerison=1;
+                UserMinutes=0;
+                MIN=0;
+                SEC=0;
                 norewrite=false;
                 displaytimer=90;
             }
@@ -1791,6 +1795,9 @@ startup:
             if(previousstate == 1)                                      // re-display last scan
             {
                 powerison=1;
+                UserMinutes=0;
+                MIN=0;
+                SEC=0;
                 norewrite=false;
                 displaytimer=90;
             }
@@ -1799,16 +1806,11 @@ startup:
             {
                 powerison=2;
                 blankscreen();
-
                 diagscreen();
-
-                P3OUT |= (BIT2);                                        // turn on LLED
                 scanit = false;
-
                 printbars();
-
-                beeper();
                 displaytimer = 120;
+                P3OUT |= (BIT2);                                        // turn on LLED
             }
 
         }
@@ -1830,22 +1832,31 @@ startup:
                 {
                     if(callclock)                                       // 0.5 sec
                     {
+                        callclock=false;
+                        if(needsetvoltage)
+                        {
+                            needsetvoltage=false;
+                            if(LUP > 0)
+                            {
+                                leftsetvoltage(LUP);                        // changes P4, Strobe LVSEL
+                            }
+                            if(RUP > 0)
+                            {
+                                rightsetvoltage(RUP);                       // changes P4, Strobe RVSEL
+                            }
+                        }
                         if(LUP > 0)
                         {
-                            leftsetvoltage(LUP);                        // changes P4, Strobe LVSEL
-                            leftselchan(ltpoint+1);                     // changes P4, Strobe LVSEL
+                            leftselchan(ltpoint);                       // changes P4, Strobe LVSEL
                         }
                         if(RUP > 0)
                         {
-                            rightsetvoltage(RUP);                       // changes P4, Strobe RVSEL
-                            rightselchan(rtpoint+1);                    // changes P4, Strobe LVSEL
+                            rightselchan(rtpoint);                      // changes P4, Strobe RVSEL
                         }
                         if((LUP>0) || (RUP>0))
                         {
-                            delay0(50);
                             pulsexfmr();                                // P2.4,5 to strobe LHVTRIG and HVTRIG
-                            voltageoff();                               // changes P4, Strobe LVSEL,RVSEL
-                            callclock=false;
+                            needbeep=true;
                         }
                     }
                     displaytimer = 90;                                  // this will keep display on
@@ -1854,8 +1865,14 @@ startup:
                 if(UserMinutes == MIN)
                 {
                     voltageoff();                                       // changes P4, Strobe LVSEL,RVSEL
-                    MIN = UserMinutes;
+                    needsetvoltage=true;
+                    MIN = UserMinutes;                                  // stop running clock
                     SEC = 0;
+                    if(needbeep)
+                    {
+                        beeper();
+                        needbeep=false;
+                    }
                     if(displaytimer==0)
                     {
                         previousstate = 1;
@@ -1874,7 +1891,6 @@ startup:
                     rewritescr();
                     displaytimer=90;
                 }
-
                 writetp();
 
                 //display battery percent
@@ -1908,20 +1924,16 @@ startup:
 
                 writechild();
                 writeintensity();
+                P3OUT |= (BIT2);                                        // turn on LLED
             } //if(powerison==1)
         }
 
-        if(scanit == true)
+        if(scanit == true)                                              // LLED turned on already
         {
             scanit = false;
 
             printscanning();
-
-//            while(1)
-//            {
-                scanhand();
-//            }
-
+            scanhand();
             printbars();
 
             beeper();
@@ -1940,14 +1952,15 @@ startup:
 
         if(hasswitch>0)
         {
+            P1IE  = 0;                                                  // 0-6 inputs interrupt disable
+            P1IFG = 0;
             tmpswitch = 0xffff;
             while(tmpswitch != P1IN )
             {
                 tmpswitch = P1IN;
-                delay2(150);                                            // debounce delay in ms
+                delay2(60);                                             // debounce delay in ms
             }
             switchcnt = 1000;
-
             hasswitch=0;
             haskey=true;
         } //if(hasswitch>0)
@@ -1963,21 +1976,33 @@ startup:
                 {
                     SwitchData = P1IN & BIT0;
                 }
+                P1IE  = 0x7F;                                           // 0-6 inputs interrupt enabled
                 SwitchData=0xff;
 
                 if(switchcnt == 0)                                      // recall scan
                 {
-                    powerison = 2;
-                    powerup =  true;
-                    previousstate = 2;
-                    goto startup;
+                    powerison=2;
+                    UserMinutes = 0;
+                    MIN=0;
+                    SEC=0;
+                    blankscreen();
+                    diagscreen();
+                    scanit = false;
+                    printbars();
+                    displaytimer = 120;
                 }
-
-                UserMinutes += 15;                                      // add 15 minutes
-                if(UserMinutes>90)
+                else
                 {
-                    UserMinutes=0;
-                }// wrap around
+                    UserMinutes += 15;                                  // add 15 minutes
+                    if(UserMinutes>90)
+                    {
+                        UserMinutes=0;                                  // wrap around
+                        MIN=0;                                          // stop running clock
+                        SEC=0;
+                        voltageoff();
+                    }// wrap around
+                    needsetvoltage=true;
+                }
                 P3OUT |= (BIT2);                                        // turn on LLED
                 beeper();
             } //if((SwitchData & BIT0) == 0)
@@ -1989,18 +2014,19 @@ startup:
                 {
                     SwitchData = P1IN & BIT1;
                 }
+                P1IE  = 0x7F;                                           // 0-6 inputs interrupt enabled
                 SwitchData=0xff;
 
                 if(switchcnt == 0)                                      // time out? extended mode
                 {
-                    extmode = true;
+                    extmode = true;                                     // set TPSEL mode
                     writechild();
                 }
                 else
                 {
                     if(extmode == true)                                 // in extmode, press child again turn off extmode
                     {
-                        extmode = false;
+                        extmode = false;                                // TPSEL mode
                         writechild();
                     }
                     else
@@ -2011,6 +2037,7 @@ startup:
                             CHILD=0;
                         }
                         writechild();
+                        needsetvoltage=true;
                     }
                 }
                 P3OUT |= (BIT2);                                        // turn on LLED
@@ -2024,13 +2051,14 @@ startup:
                 {
                     SwitchData = P1IN & BIT2;
                 }
+                P1IE  = 0x7F;                                           // 0-6 inputs interrupt enabled
                 SwitchData=0xff;
 
                 if(extmode == true)
                 {
                     ltpoint +=1;
-                    if(ltpoint>10)                                      // VER5 init ltpoint to 0
-                        ltpoint=0;
+                    if(ltpoint>11)                                      // VER5 init ltpoint to 0
+                        ltpoint=1;
                 }
                 else
                 {
@@ -2046,6 +2074,7 @@ startup:
                             LUP=7;
                     }
                     writeintensity();
+                    needsetvoltage=true;
                 }
                 P3OUT |= (BIT2);                                        // turn on LLED
                 beeper();
@@ -2058,13 +2087,14 @@ startup:
                 {
                     SwitchData = P1IN & BIT3;
                 }
+                P1IE  = 0x7F;                                           // 0-6 inputs interrupt enabled
                 SwitchData=0xff;
 
                 if(extmode == true)
                 {
                     rtpoint +=1;
-                    if(rtpoint>10)                                      // VER5 init rtpoint to 0
-                        rtpoint=0;
+                    if(rtpoint>11)                                      // VER5 init rtpoint to 0
+                        rtpoint=1;
                 }
                 else
                 {
@@ -2080,6 +2110,7 @@ startup:
                             RUP=7;
                     }
                     writeintensity();
+                    needsetvoltage=true;
                 }
                 P3OUT |= (BIT2);                                        // turn on LLED
                 beeper();
@@ -2092,11 +2123,12 @@ startup:
                 {
                     SwitchData = P1IN & BIT4;
                 }
+                P1IE  = 0x7F;                                           // 0-6 inputs interrupt enabled
                 SwitchData=0xff;
 
                 if(extmode == true)
                 {
-                    if(ltpoint>0)                                      // VER5 init ltpoint to 0
+                    if(ltpoint>1)                                      // VER5 init ltpoint to 0
                     {
                         ltpoint -=1;
                     }
@@ -2108,6 +2140,7 @@ startup:
                         LUP -= 1;
                     }
                     writeintensity();
+                    needsetvoltage=true;
                 }
                 P3OUT |= (BIT2);                                        // turn on LLED
                 beeper();
@@ -2120,11 +2153,12 @@ startup:
                 {
                     SwitchData = P1IN & BIT5;
                 }
+                P1IE  = 0x7F;                                           // 0-6 inputs interrupt enabled
                 SwitchData=0xff;
 
                 if(extmode == true)
                 {
-                    if(rtpoint>0)                                       // VER5 init rtpoint to 0
+                    if(rtpoint>1)                                       // VER5 init rtpoint to 0
                     {
                         rtpoint -=1;
                     }
@@ -2136,6 +2170,7 @@ startup:
                         RUP -= 1;
                     }
                     writeintensity();
+                    needsetvoltage=true;
                 }
                 P3OUT |= (BIT2);                                        // turn on LLED
                 beeper();
@@ -2148,12 +2183,14 @@ startup:
                 {
                     SwitchData = P1IN & BIT6;
                 }
+                P1IE  = 0x7F;                                           // 0-6 inputs interrupt enabled
                 SwitchData=0xff;
 
                 if(powerison==2)
                 {
                     powerison=1;
                     previousstate=1;
+                    needsetvoltage=true;
                     timeout();
                 }
 
@@ -2174,6 +2211,7 @@ startup:
                     else
                     {
                         previousstate = 1;
+                        needsetvoltage=true;
                         timeout();
                     }
                 } //if(powerison==1)
