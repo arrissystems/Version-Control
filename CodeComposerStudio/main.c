@@ -10,7 +10,10 @@
  * Revision V2 04/19/2018 Changed scanhand timing and display baseline
  * Revision V3 05/18/2018 Added clktest and make array size selectable
  * Revision V4 06/02/2018 Added automatic voltage level setting for scanning
- * Revision V5 06/08/2018 Added recall of scanning and recall of RTP, LTP, and levels, independent Scan voltage levela
+ * Revision V5 06/08/2018 Added recall of scanning and recall of RTP, LTP, and levels,
+ *  independent Scan voltage levels
+ * Revision V5.1 06/21/2018 added needsetvoltage to set voltage levels and
+ *  keep voltage levels on during treatment cycles
 */
 
 #define VER4    true
@@ -26,7 +29,6 @@
 
 #include <stdint.h>
 #include <stdbool.h>
-//#include "boot.h"
 
 #include    "charmap.h"
 #include    "newimmumax2.h"
@@ -116,8 +118,6 @@ int         iPixC;
 int         iPixR;
 int         NUMA[3]={0,0,0};
 
-//unsigned char timercounter;
-
 int         leftadcval;
 int         rightadcval;
 int         leftmax;
@@ -128,8 +128,6 @@ int         leftadcarray[13][arrayj];                                   // VER3
 int         rightadcarray[13][arrayj];                                  // VER3
 int         leftarray[13];
 int         rightarray[13];
-//int         leftmean;
-//int         rightmean;
 int         ltpoint;
 int         rtpoint;
 bool        extmode;
@@ -526,7 +524,7 @@ void    charAll(int redmask, int greenmask, int bluemask)
     unsigned char *iints = (unsigned char*)all[charoffset];
 
     // start writing to LCD memory
-    // write the character A iPixC X iPixR pixels
+    // write the character iPixC X iPixR pixels
     iCEAddress = 320-(iCols*iPixC)-1;                                   //Column start at 0 to max 0000013f
     iREAddress = 240-(iRows*iPixR)-1;                                   //Row start at 0 to 240 max 000000ef
     iCSAddress = iCEAddress-iPixC+1;                                    //iCols-1+character pixels per column max 0000013f
@@ -644,7 +642,6 @@ __interrupt void CCR0_ISR(void) {
             }
         }
     }
-    //_enable_interrupt();
 }
 
 
@@ -663,9 +660,7 @@ void scanadc(unsigned int INCHAN)                                       // scan 
 }
 
 
-// ADC interrupt routine. Pulls CPU out of sleep mode for the main loop.
-
-
+// ADC interrupt routine.
 #pragma vector=ADC10_VECTOR
 
 __interrupt void ADC10_ISR (void)
@@ -675,7 +670,7 @@ __interrupt void ADC10_ISR (void)
 }
 
 
-BYTE    xchangebits(int ibits)
+BYTE    xchangebits(int ibits)                                          // setup voltage regulator levels
 {
 BYTE cii;
     switch (ibits)
@@ -733,26 +728,26 @@ BYTE cii;
     return cii;
 }
 
-void convertdigits(int inumber)
+void convertdigits(int inumber)                                         // convert numbers to 2 digits
 {
     int iRemainder;
     int iTemp1;
 
-    NUMA[0] = inumber / 100;                                            //get the ms digit (hundred)
+    NUMA[0] = inumber / 100;                                            // get the ms digit (hundred)
 
     iTemp1 = NUMA[0] * 100;
-    iRemainder = inumber - iTemp1;                                      //get the remainder (1 to 99)
-    NUMA[1] = iRemainder / 10;                                          //get the 2nd digit (tens)
+    iRemainder = inumber - iTemp1;                                      // get the remainder (1 to 99)
+    NUMA[1] = iRemainder / 10;                                          // get the 2nd digit (tens)
 
-    iTemp1 = NUMA[1] * 10;                                              //get the ls digit (single digit)
+    iTemp1 = NUMA[1] * 10;                                              // get the ls digit (single digit)
     NUMA[2] = iRemainder - iTemp1;
 }
 
 void write3digits(int inumber, int REDM, int GRNM, int BLUM)
 {
-    convertdigits(inumber);                                             //convert numbers to array of 3 digits
+    convertdigits(inumber);                                             // convert numbers to array of 3 digits
 
-    if(NUMA[0] == 0)                                                    //write ms digit
+    if(NUMA[0] == 0)                                                    // write ms digit
     {
         ichar = ' ';
     }
@@ -762,11 +757,11 @@ void write3digits(int inumber, int REDM, int GRNM, int BLUM)
     }
     charAll(REDM, GRNM, BLUM);
 
-    iCols+=1;                                                           //write 2nd digit
+    iCols+=1;                                                           // write 2nd digit
     ichar = NUMA[1]+0x30;
     charAll(REDM, GRNM, BLUM);
 
-    iCols+=1;                                                           //write ls digit
+    iCols+=1;                                                           // write ls digit
     ichar = NUMA[2]+0x30;
     charAll(REDM, GRNM, BLUM);
 
@@ -774,9 +769,9 @@ void write3digits(int inumber, int REDM, int GRNM, int BLUM)
 
 void writedigits(int inumber, int REDM, int GRNM, int BLUM)
 {
-    convertdigits(inumber);                                             //convert numbers to array of 3 digits
+    convertdigits(inumber);                                             // convert numbers to array of 3 digits
 
-    if(NUMA[0] == 0)                                                    //write ms digit
+    if(NUMA[0] == 0)                                                    // write ms digit
     {
         ichar = ' ';
     }
@@ -786,11 +781,11 @@ void writedigits(int inumber, int REDM, int GRNM, int BLUM)
     }
 //    charAll(0, 0, 0);
 
-//    iCols+=1;                                                         //write 2nd digit
+//    iCols+=1;                                                         // write 2nd digit
     ichar = NUMA[1]+0x30;
     charAll(REDM, GRNM, BLUM);
 
-    iCols+=1;                                                           //write ls digit
+    iCols+=1;                                                           // write ls digit
     ichar = NUMA[2]+0x30;
     charAll(REDM, GRNM, BLUM);
 
@@ -815,8 +810,8 @@ int intii;
     write_data(0xEF);
 
     //**********************
-    write_command(0x29);                                                //display on
-    write_command(0x2C);                                                //RAM write control
+    write_command(0x29);                                                // display on
+    write_command(0x2C);                                                // RAM write control
 
     for(intjj=240;intjj>0;intjj--)                                      // write 240 lines rows
     {
@@ -831,7 +826,7 @@ int intii;
         }
     }
 
-    write_command(0x29);                                                //display on
+    write_command(0x29);                                                // display on
 }
 
 
@@ -891,25 +886,25 @@ void writeintensity(void)
 {
 unsigned int    i, j, k;
 //write program intensity
-    iPixC = 16;                                                         //16 pixels horizontal
-    iPixR = 20;                                                         //20 pixels vertical
+    iPixC = 16;                                                         // 16 pixels horizontal
+    iPixR = 20;                                                         // 20 pixels vertical
 
-    iRows = 10;                                                         //display left hand intensity
+    iRows = 10;                                                         // display left hand intensity
     iCols = 1;
     j=LUP;
     writedigits(j, 0xff, 0, 0xff);
 
-    iRows = 10;                                                         //display right hand intensity
+    iRows = 10;                                                         // display right hand intensity
     iCols = 17;
     k=RUP;
     writedigits(k, 0xff, 0x7f, 0);
 
     //display intensity bar
-    iPixC = 16;                                                         //16 pixels horizontal
-    iPixR = 20;                                                         //20 pixels vertical
+    iPixC = 16;                                                         // 16 pixels horizontal
+    iPixR = 20;                                                         // 20 pixels vertical
     ichar = 'Q';
 
-    iRows=2;                                                            //display left intensity bar
+    iRows=2;                                                            // display left intensity bar
     iCols=1;
     if(CHILD==1)                                                        // VER5 init CHILD to 0
     {
@@ -929,7 +924,7 @@ unsigned int    i, j, k;
         charAll(0xff, 0, 0xff);
     }
 
-    iRows=2;                                                            //display right intensity bar
+    iRows=2;                                                            // display right intensity bar
     iCols=18;
     if(CHILD==1)                                                        // VER5 init CHILD to 0
     {
@@ -1007,8 +1002,7 @@ void leftselchan(int bii)
 {
     int    aii;
 
-//    P4OUT &= ~(BIT5 + BIT6);                                          // turn off Din, CLK
-    P4OUT = llastp4 & 0x1f;                                             // turn off Din, CLK
+    P4OUT = llastp4 & 0x1f;                                             // turn off Din, CLK, leave voltage bits alone
     P4OUT |= (BIT7);                                                    // clear the shift register
     P3OUT |= (BIT3);                                                    // strobe the LVSEL
     sdelay(3);
@@ -1144,7 +1138,7 @@ void scanhand(void)
                 leftmin=leftarray[i];
         }
 
-        if((leftmax - leftmin) > llimit)
+        if((leftmax - leftmin) > llimit)                                // found the level
         {
             break;
         }
@@ -1177,7 +1171,7 @@ void scanhand(void)
                 rightmin=rightarray[i];
         }
 
-        if((rightmax - rightmin) > rlimit)
+        if((rightmax - rightmin) > rlimit)                              // found the level
         {
             break;
         }
@@ -1273,24 +1267,24 @@ void scanhand(void)
     leftave=leftave/11;
     rightave=rightave/11;
 
-    iPixC = 16;                                                         //16 pixels horizontal
-    iPixR = 20;                                                         //20 pixels vertical
+    iPixC = 16;                                                         // 16 pixels horizontal
+    iPixR = 20;                                                         // 20 pixels vertical
 
-    iRows = 11;                                                         //display left hand intensity
+    iRows = 11;                                                         // display left hand intensity
     iCols = 3;
     write3digits(leftmax, 0xff, 0, 0xff);
     iCols +=1;
     write3digits(lscanvt, 0xff, 0, 0xff);
 
-    iRows = 11;                                                         //display right hand intensity
+    iRows = 11;                                                         // display right hand intensity
     iCols = 12;
     write3digits(rightmax, 0xff, 0x7f, 0);
     iCols +=1;
     write3digits(rscanvt, 0xff, 0x7f, 0);
 
-    leftrange = leftmax-leftave;                                        //leftmax-leftave
+    leftrange = leftmax-leftave;                                        // leftmax-leftave
 
-    rightrange = rightmax-rightave;                                     //rightmax-rightave
+    rightrange = rightmax-rightave;                                     // rightmax-rightave
 
     if(leftrange < 10)                                                  // no signal
     {
@@ -1302,7 +1296,7 @@ void scanhand(void)
         rightrange = 0x7fff;
     }
 
-    for (i=1;i<12;++i)                                                  //get values from adc
+    for (i=1;i<12;++i)                                                  // get values from adc
     {
         ltmp=leftarray[i]-leftave;
         ltmp = ltmp*7;
@@ -1323,7 +1317,7 @@ void scanhand(void)
 
         if(ltmp > 1)
         {
-            rightbar[i]=ltmp;                                           //-rightmin;
+            rightbar[i]=ltmp;                                           // -rightmin;
         }
         else
         {
@@ -1475,13 +1469,13 @@ void printbars(void)
 {
     unsigned int i, j;
 
-    iPixC = 16;                                                         //16 pixels horizontal
-    iPixR = 20;                                                         //20 pixels vertical
+    iPixC = 16;                                                         // 16 pixels horizontal
+    iPixR = 20;                                                         // 20 pixels vertical
 //
 //  Blank bar areas
 //
     ichar='Z';
-    for (i=1;i<12;i++)                                                  //display left hand scan result
+    for (i=1;i<12;i++)                                                  // display left hand scan result
     {
         iRows=11-i;
         ichar=' ';
@@ -1494,7 +1488,7 @@ void printbars(void)
     }
 
     ichar='Z';
-    for (i=1;i<12;i++)                                                  //display left hand scan result
+    for (i=1;i<12;i++)                                                  // display left hand scan result
     {
         iRows=11-i;
         iCols=2;
@@ -1535,8 +1529,8 @@ void rewritescr(void)
     write_data(0xEF);
 
     //**********************
-    write_command(0x29);                                                //display on
-    write_command(0x2C);                                                //RAM write control
+    write_command(0x29);                                                // display on
+    write_command(0x2C);                                                // RAM write control
 
     pointer = 9599;
 
@@ -1562,26 +1556,26 @@ void rewritescr(void)
 
     }
 
-    write_command(0x29);                                                //display on
+    write_command(0x29);                                                // display on
 
 
     //write static texts on the LCD
 
-    iPixC = 16;                                                         //16 pixels horizontal per char
-    iPixR = 20;                                                         //20 pixels vertical per char
+    iPixC = 16;                                                         // 16 pixels horizontal per char
+    iPixR = 20;                                                         // 20 pixels vertical per char
 
     iRows=7;
     iCols=13;
     ichar = 'M';
-    charAll(0xff, 0xff, 0xff);                                          //black color
+    charAll(0xff, 0xff, 0xff);                                          // black color
 
     iCols++;
     ichar = 'I';
-    charAll(0xff, 0xff, 0xff);                                          //black color
+    charAll(0xff, 0xff, 0xff);                                          // black color
 
     iCols++;
     ichar = 'N';
-    charAll(0xff, 0xff, 0xff);                                          //black color
+    charAll(0xff, 0xff, 0xff);                                          // black color
 
     iRows=4;
     iCols=3;
@@ -1623,15 +1617,15 @@ void rewritescr(void)
     for (i=0;i<5;i++) {
         iCols=3+i;
         ichar=LabelAry[i];
-        charAll(0xff, 0xff, 0xff);                                      //black color
+        charAll(0xff, 0xff, 0xff);                                      // black color
     };
 
     iRows=1;
     iCols=14;
     ichar = '%';
-    charAll(0xff, 0xff, 0xff);                                          //black color
+    charAll(0xff, 0xff, 0xff);                                          // black color
 
-    displaytimer=90;                                                    //90 sec LED on
+    displaytimer=90;                                                    // 90 sec LED on
     norewrite=true;
 //    beeper();
 }
@@ -1640,22 +1634,22 @@ void diagscreen(void)
 {
     unsigned int i;
     // this section is to display diagnostic page
-    iPixC = 16;                                                         //16 pixels horizontal
-    iPixR = 20;                                                         //20 pixels vertical
+    iPixC = 16;                                                         // 16 pixels horizontal
+    iPixR = 20;                                                         // 20 pixels vertical
 
-    for (i=11;i>0;--i)                                                  //display 1 to 11 number at the left side
+    for (i=11;i>0;--i)                                                  // display 1 to 11 number at the left side
     {
         iRows=11-i;
         iCols=0;
-        if (i>9)                                                        //if it is a 2 digit number
+        if (i>9)                                                        // if it is a 2 digit number
         {
-            ichar=digits[1];                                            //write ms digit
+            ichar=digits[1];                                            // write ms digit
             charAll(0xff, 0xff, 0xff);
-            iCols +=1;                                                  //write ls digit
+            iCols +=1;                                                  // write ls digit
             ichar=digits[i-10];
             charAll(0xff, 0xff, 0xff);
         }
-        else                                                            //only one digit
+        else                                                            // only one digit
         {
             iCols +=1;
             ichar=digits[i];
@@ -1663,19 +1657,19 @@ void diagscreen(void)
         }
     }
 
-    for (i=11;i>0;--i)                                                  //display 1 to 11 number at the right side
+    for (i=11;i>0;--i)                                                  // display 1 to 11 number at the right side
     {
         iRows=11-i;
         iCols=17;
-        if (i>9)                                                        //if it is a 2 digit number
+        if (i>9)                                                        // if it is a 2 digit number
         {
-            ichar=digits[1];                                            //write ms digit
+            ichar=digits[1];                                            // write ms digit
             charAll(0xff, 0xff, 0xff);
-            iCols +=1;                                                  //write ls digit
+            iCols +=1;                                                  // write ls digit
             ichar=digits[i-10];
             charAll(0xff, 0xff, 0xff);
         }
-        else                                                            //only one digit
+        else                                                            // only one digit
         {
             iCols +=1;
             ichar=digits[i];
@@ -1696,44 +1690,44 @@ void diagscreen(void)
 void writetp(void)
 {
     // write left treatment point to LCD
-    iPixC = 16;                                                         //16 pixels horizontal per char
-    iPixR = 20;                                                         //20 pixels vertical per char
+    iPixC = 16;                                                         // 16 pixels horizontal per char
+    iPixR = 20;                                                         // 20 pixels vertical per char
 
-    iRows=4;                                                            //write ms digit of minute
+    iRows=4;                                                            // write ms digit of minute
     iCols=7;
-    writedigits(ltpoint,0,0xff,0xff);                                 //red color
+    writedigits(ltpoint,0,0xff,0xff);                                   // red color
 
     // write right treatment point to LCD
-    iPixC = 16;                                                         //16 pixels horizontal per char
-    iPixR = 20;                                                         //20 pixels vertical per char
+    iPixC = 16;                                                         // 16 pixels horizontal per char
+    iPixR = 20;                                                         // 20 pixels vertical per char
 
-    iRows=4;                                                            //write ms digit of minute
+    iRows=4;                                                            // write ms digit of minute
     iCols=15;
-    writedigits(rtpoint,0,0xff,0xff);                                 //red color
+    writedigits(rtpoint,0,0xff,0xff);                                   // red color
 
 
     // write running time to LCD
-    iPixC = 16;                                                         //16 pixels horizontal per char
-    iPixR = 20;                                                         //20 pixels vertical per char
+    iPixC = 16;                                                         // 16 pixels horizontal per char
+    iPixR = 20;                                                         // 20 pixels vertical per char
 
-    iRows=6;                                                            //write ms digit of minute
+    iRows=6;                                                            // write ms digit of minute
     iCols=10;
-    writedigits(MIN,0,0xff,0xff);                                       //red color
+    writedigits(MIN,0,0xff,0xff);                                       // red color
 
-    iCols+=1;                                                           //write : after minute
+    iCols+=1;                                                           // write : after minute
     ichar = ':';
-    charAll(0xff, 0xff, 0xff);                                          //black color
+    charAll(0xff, 0xff, 0xff);                                          // black color
 
-    iCols+=1;                                                           //write ms digit of second
-    writedigits(SEC,0,0xff,0xff);                                       //red color
+    iCols+=1;                                                           // write ms digit of second
+    writedigits(SEC,0,0xff,0xff);                                       // red color
 
     // write user selected time to LCD
-    iPixC = 16;                                                         //16 pixels horizontal
-    iPixR = 20;                                                         //20 pixels vertical
+    iPixC = 16;                                                         // 16 pixels horizontal
+    iPixR = 20;                                                         // 20 pixels vertical
 
-    iRows=7;                                                            //write ms digit of minute
+    iRows=7;                                                            // write ms digit of minute
     iCols=10;
-    writedigits(UserMinutes,0xff,0xff,0xff);                            //black color
+    writedigits(UserMinutes,0xff,0xff,0xff);                            // black color
 }
 
 void timeout(void)
@@ -1838,11 +1832,11 @@ int main(void)
                             needsetvoltage=false;
                             if(LUP > 0)
                             {
-                                leftsetvoltage(LUP);                        // changes P4, Strobe LVSEL
+                                leftsetvoltage(LUP);                    // changes P4, Strobe LVSEL
                             }
                             if(RUP > 0)
                             {
-                                rightsetvoltage(RUP);                       // changes P4, Strobe RVSEL
+                                rightsetvoltage(RUP);                   // changes P4, Strobe RVSEL
                             }
                         }
                         if(LUP > 0)
@@ -1911,15 +1905,15 @@ int main(void)
                 BatPcnt = BatPcnt * 100;
                 BatPcnt = BatPcnt / 150;
 
-                iRows=1;                                                //write to LCD
+                iRows=1;                                                // write to LCD
                 iCols=11;
                 if(BatPcnt < 10)
                 {
-                    writedigits(BatPcnt,0,0xff,0xff);                   //red color
+                    writedigits(BatPcnt,0,0xff,0xff);                   // red color
                 }
                 else
                 {
-                    writedigits(BatPcnt,0xff,0xff,0);                   //green color
+                    writedigits(BatPcnt,0xff,0xff,0);                   // green color
                 }
 
                 writechild();
@@ -2128,7 +2122,7 @@ int main(void)
 
                 if(extmode == true)
                 {
-                    if(ltpoint>1)                                      // VER5 init ltpoint to 0
+                    if(ltpoint>1)                                       // VER5 init ltpoint to 0
                     {
                         ltpoint -=1;
                     }
