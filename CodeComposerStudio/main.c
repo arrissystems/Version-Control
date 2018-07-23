@@ -14,10 +14,13 @@
  *  independent Scan voltage levels
  * Revision V5.1 06/21/2018 added needsetvoltage to set voltage levels and
  *  keep voltage levels on during treatment cycles
+ * Revision V5.2 07/13/2018 added 8 level for each scan bar
+ * Revision V6 07/13/2018 added stepper motor routine for eTappermain60 board
 */
 
 #define VER4    true
-#define VER5    true
+#define VER5    false
+#define VER6    true
 #define clktest false       //true
 
 //#include    "msp430f2274.h"
@@ -39,10 +42,11 @@
 #define setdly  100                                                     // leading
 int     lscanvt;                                                        // scan voltage
 int     rscanvt;                                                        // scan voltage
-#define arrayj  8                                                       // 8, 4, 2 VER3
-#define arrayc  3                                                       // 3, 2, 1 VER3
+#define arrayj  8                                                       // 8, 4, 2 VER3 number of scans per point
+#define arrayc  3                                                       // 3, 2, 1 VER3 division
 #define llimit  20
 #define rlimit  20
+#define maxbars 56                                                      // 7X8 per diag bar
 
 int main(void);
 void timeout(void);
@@ -82,6 +86,22 @@ bool        needbeep;
 bool        haskey;
 bool        rdbattery;
 bool        needsetvoltage;
+#if VER6
+bool        setscale;
+int         scalenumber;
+float       fsteps;
+int         isteps;
+#define     pitch   0.15    //0.3                                           // 0.3mm per revolution
+#define     degperstep  18                                                  // degrees per step
+#define     stepsperrot 360/degperstep
+#define     rotperpos   1
+#define     stepsperpos stepsperrot * rotperpos
+#define     lnperstep   pitch/360*degperstep                                // length per step
+#define     minscale    2.54                                                // scale 0 length
+#define     incperscale 0.8                                                 // increment length per scale
+
+#endif
+
 int         dlycnt0;
 int         dlycnt1;
 int         dlycnt2;
@@ -122,12 +142,37 @@ int         leftadcval;
 int         rightadcval;
 int         leftmax;
 int         rightmax;
-int         leftbar[12];
-int         rightbar[12];
-int         leftadcarray[13][arrayj];                                   // VER3
-int         rightadcarray[13][arrayj];                                  // VER3
-int         leftarray[13];
-int         rightarray[13];
+#if VER5
+#define numpts  12
+#define numbar  12
+int         leftbar[numpts];
+int         rightbar[numpts];
+int         leftadcarray[numpts+1][arrayj];                                   // VER3
+int         rightadcarray[numpts+1][arrayj];                                  // VER3
+int         leftarray[numpts+1];
+int         rightarray[numpts+1];
+#endif
+
+#if VER6
+#define numpts  12
+#define numbar  12
+#define stby    (BIT5)
+#define mdir    (BIT6)
+#define mclk    (BIT7)
+int         leftbar[numpts];
+int         rightbar[numpts];
+int         leftadcarray[numpts+1][arrayj];                                   // VER3
+int         rightadcarray[numpts+1][arrayj];                                  // VER3
+int         leftarray[numpts+1];
+int         rightarray[numpts+1];
+int         lsteps;
+int         rsteps;
+void        lstepup(int lstps);
+void        lstepdn(int lstps);
+void        rstepup(int rstps);
+void        rstepdn(int rstps);
+#endif
+
 int         ltpoint;
 int         rtpoint;
 bool        extmode;
@@ -148,101 +193,118 @@ char digits[] = {'0', '1', '2', '3', '4', '5', '6', '7', '8', '9' };
 
 const unsigned char * all[] =                                           //94 addresses
 {
-     spa,
-     chEX,
-     DQ,
-     chpd,
-     ch$,
-     chPC,
-     chAM,
-     chAP,
-     lp,
-     rp,
-     star,
-     plus,
-     comma,
-     minus,
-     period,
-     fslash,
-     ch0,
-     ch1,
-     ch2,
-     ch3,
-     ch4,
-     ch5,
-     ch6,
-     ch7,
-     ch8,
-     ch9,
-     colon,
-     semi,
-     LT,
-     equal,
-     GT,
-     QM,
-     chAT,
-     AA,
-     BB,
-     CC,
-     DD,
-     EE,
-     FF,
-     GG,
-     HH,
-     II,
-     JJ,
-     KK,
-     LL,
-     MM,
-     NN,
-     OO,
-     PP,
-     QQ,
-     RR,
-     SS,
-     TT,
-     UU,
-     VV,
-     WW,
-     XX,
-     YY,
-     ZZ,
-     lb,
-     bslash,
-     rb,
-     chXO,
-     us,
-     chGA,
-     cha,
-     chb,
-     chc,
-     chd,
-     che,
-     chf,
-     chg,
-     chh,
-     chi,
-     chj,
-     chk,
-     chl,
-     chm,
-     chn,
-     cho,
-     chp,
-     chq,
-     chr,
-     chs,
-     cht,
-     chu,
-     chv,
-     chw,
-     chx,
-     chy,
-     chz,
-     lcb,
-     orr,
-     rcb,
-     tilde,
+     spa,           //0x20
+     chEX,          //0x21
+     DQ,            //0x22
+     chpd,          //0x23
+     ch$,           //0x24
+     chPC,          //0x25
+     chAM,          //0x26
+     chAP,          //0x27
+     lp,            //0x28
+     rp,            //0x29
+     star,          //0x2A
+     plus,          //0x2B
+     comma,         //0x2C
+     minus,         //0x2D
+     period,        //0x2E
+     fslash,        //0x2F
+     ch0,           //0x30
+     ch1,           //0x31
+     ch2,           //0x32
+     ch3,           //0x33
+     ch4,           //0x34
+     ch5,           //0x35
+     ch6,           //0x36
+     ch7,           //0x37
+     ch8,           //0x38
+     ch9,           //0x39
+     colon,         //0x3A
+     semi,          //0x3B
+     LT,            //0x3C
+     equal,         //0x3D
+     GT,            //0x3E
+     QM,            //0x3F
+     chAT,          //0x40
+     AA,            //0x41
+     BB,            //0x42
+     CC,            //0x43
+     DD,            //0x44
+     EE,            //0x45
+     FF,            //0x46
+     GG,            //0x47
+     HH,            //0x48
+     II,            //0x49
+     JJ,            //0x4A
+     KK,            //0x4B
+     LL,            //0x4C
+     MM,            //0x4D
+     NN,            //0x4E
+     OO,            //0x4F
+     PP,            //0x50
+     QQ,            //0x51
+     RR,            //0x52
+     SS,            //0x53
+     TT,            //0x54
+     UU,            //0x55
+     VV,            //0x56
+     WW,            //0x57
+     XX,            //0x58
+     YY,            //0x59
+     ZZ,            //0x5A
+     lb,            //0x5B
+     bslash,        //0x5C
+     rb,            //0x5D
+     chXO,          //0x5E
+     us,            //0x5F
+     chGA,          //0x60
+     cha,           //0x61
+     chb,           //0x62
+     chc,           //0x63
+     chd,           //0x64
+     che,           //0x65
+     chf,           //0x66
+     chg,           //0x67
+     chh,           //0x68
+     chi,           //0x69
+     chj,           //0x6A
+     chk,           //0x6B
+     chl,           //0x6C
+     chm,           //0x6D
+     chn,           //0x6E
+     cho,           //0x6F
+     chp,           //0x70
+     chq,           //0x71
+     chr,           //0x72
+     chs,           //0x73
+     cht,           //0x74
+     chu,           //0x75
+     chv,           //0x76
+     chw,           //0c77
+     chx,           //0x78
+     chy,           //0x79
+     chz,           //0x7A
+     lcb,           //0x7B
+     orr,           //0x7C
+     rcb,           //0x7D
+     tilde,         //0x7E
+     spa,           //0x80
+     minus1,        //0x81
+     minus2,        //0x82
+     minus3,        //0x83
+     minus4,        //0x84
+     minus5,        //0x85
+     minus6,        //0x86
+     minus7,        //0x87
+     minus8,        //0x88
+     plus1,         //0x89
+     plus2,         //0x8A
+     plus3,         //0x8B
+     plus4,         //0x8C
+     plus5,         //0x8D
+     plus6,         //0x8E
+     plus7,         //0x8F
+     plus8          //0x90
 //     clock1
 
 };
@@ -514,7 +576,7 @@ void    write_address()
 
 void    charAll(int redmask, int greenmask, int bluemask)
 {
-    int    tmp;
+    unsigned char    tmp;
 
     unsigned int pointer;
     unsigned int charoffset;
@@ -838,16 +900,38 @@ unsigned int    i;
     iRows=3;
     if(extmode == true)
     {
+#if VER6
+        if(setscale==true)
+        {
+            PrgAry[0] = 'S';
+            PrgAry[1] = 'C';
+            PrgAry[2] = 'A';
+            PrgAry[3] = 'L';
+            PrgAry[4] = 'E';
+        }
+        else
+        {
+            PrgAry[0] = 'T';
+            PrgAry[1] = 'P';
+            PrgAry[2] = 'S';
+            PrgAry[3] = 'E';
+            PrgAry[4] = 'L';
+        }
+#endif
+#if VER5
         PrgAry[0] = 'T';
         PrgAry[1] = 'P';
         PrgAry[2] = 'S';
         PrgAry[3] = 'E';
         PrgAry[4] = 'L';
+#endif
+
         for (i=0;i<5;i++) {
             iCols=11+i;
             ichar=PrgAry[i];
             charAll(0xff, 0x7f, 0xff);
         };
+
     }
     else
     {
@@ -998,7 +1082,135 @@ void rightsetvoltage(int volt)
     P3OUT &= ~(BIT4);
 }
 
-void leftselchan(int bii)
+#if VER6
+
+void    lstepup(int bii)                                                // bii is steps out
+{
+unsigned int aii;
+
+    P4OUT &= ~(mclk + mdir);                                            // setup for start up
+    P3OUT |= (BIT3);                                                    // strobe the LVSEL
+    sdelay(3);
+    P3OUT &= ~(BIT3);
+    sdelay(3);                                                          // 1us mode setup time
+
+    P4OUT |= stby;
+    P3OUT |= (BIT3);                                                    // turn on standby
+    sdelay(3);
+    P3OUT &= ~(BIT3);
+    sdelay(160);                                                        // mode to standby hold time
+
+    P4OUT |= mdir;                                                      // clock high, mdir low for reverse
+    P3OUT |= (BIT3);                                                    // strobe the LVSEL
+    sdelay(3);
+    P3OUT &= ~(BIT3);
+    sdelay(3);                                                          // first clock high
+
+    for(aii=0; aii<bii; aii++)
+    {
+        P4OUT |= mclk;                                                  // clock high, mdir low for reverse
+        P3OUT |= (BIT3);                                                // strobe the LVSEL
+        sdelay(3);
+        P3OUT &= ~(BIT3);
+        sdelay(3);                                                      // first clock high
+
+        P4OUT &= ~mclk;                                                 // clock low for reverse
+        P3OUT |= (BIT3);                                                // strobe the LVSEL
+        sdelay(3);
+        P3OUT &= ~(BIT3);
+        sdelay(3);                                                      // this completes first step
+    }
+
+    P4OUT &= ~(mclk + mdir);                                            // reset
+    P3OUT |= (BIT3);                                                    // strobe the LVSEL
+    sdelay(3);
+    P3OUT &= ~(BIT3);
+    sdelay(3);                                                          // 1us mode setup time
+
+    P4OUT &= ~stby;
+    P3OUT |= (BIT3);                                                    // turn off standby
+    sdelay(3);
+    P3OUT &= ~(BIT3);
+    sdelay(160);                                                        // mode to standby hold time
+    lsteps += bii;                                                      // save last pos
+
+}
+
+void    lstepdn(int bii)                                                // bii is steps in
+{
+unsigned int aii;
+
+    P4OUT &= ~(mclk + mdir);                                            // setup for start up
+    P3OUT |= (BIT3);                                                    // strobe the LVSEL
+    sdelay(3);
+    P3OUT &= ~(BIT3);
+    sdelay(3);                                                          // 1us mode setup time
+
+    P4OUT |= stby;
+    P3OUT |= (BIT3);                                                    // turn on standby
+    sdelay(3);
+    P3OUT &= ~(BIT3);
+    sdelay(160);                                                        // mode to standby hold time
+
+    for(aii=0; aii<bii; aii++)
+    {
+        P4OUT |= mclk;                                                  // clock high, mdir low for reverse
+        P3OUT |= (BIT3);                                                // strobe the LVSEL
+        sdelay(3);
+        P3OUT &= ~(BIT3);
+        sdelay(3);                                                      // first clock high
+
+        P4OUT &= ~mclk;                                                 // clock low for reverse
+        P3OUT |= (BIT3);                                                // strobe the LVSEL
+        sdelay(3);
+        P3OUT &= ~(BIT3);
+        sdelay(3);                                                      // this completes first step
+    }
+
+    P4OUT &= ~(mclk + mdir);                                            // reset
+    P3OUT |= (BIT3);                                                    // strobe the LVSEL
+    sdelay(3);
+    P3OUT &= ~(BIT3);
+    sdelay(3);                                                          // 1us mode setup time
+
+    P4OUT &= ~stby;
+    P3OUT |= (BIT3);                                                    // turn off standby
+    sdelay(3);
+    P3OUT &= ~(BIT3);
+    sdelay(160);                                                        // mode to standby hold time
+    lsteps -= bii;                                                      // save last pos
+}
+
+
+void leftselchan(int bii)                                               // steppermotor driver bii is LTP 1-11
+{
+    int    aii;
+
+    P4OUT = llastp4 & 0x1f;                                             // turn off STBY, DIR, CLK, leave voltage bits alone
+    P3OUT |= (BIT3);                                                    // strobe the LVSEL
+    sdelay(3);
+    P3OUT &= ~(BIT3);
+    sdelay(160);                                                        // wait for 100uS
+
+    aii = ((bii-1)*isteps) - lsteps;
+    // step out to bii position from current position lsteps
+    if(aii > 0)
+    {
+        lstepup(aii);                                                   // step out in steps
+    }
+    if(aii < 0)
+    {
+        aii = lsteps - ((bii-1)*isteps);
+        lstepdn(aii);                                                   // step in in steps
+    }
+
+    P4OUT &= ~(BIT5 + BIT6 + BIT7);
+    sdelay(3);
+}
+#endif
+
+#if VER5
+void leftselchan(int bii)                                               // LTP
 {
     int    aii;
 
@@ -1036,7 +1248,7 @@ void leftselchan(int bii)
     P4OUT &= ~(BIT5 + BIT6 + BIT7);
     sdelay(3);
 }
-
+#endif
 
 unsigned int leftscanchan(void)
 {
@@ -1047,6 +1259,133 @@ unsigned int leftscanchan(void)
     return  ADCValue;
 }
 
+#if VER6
+
+void    rstepup(int bii)                                                // step out in steps
+{
+unsigned int aii;
+
+    P4OUT &= ~(mclk + mdir);                                            // setup for start up
+    P3OUT |= (BIT4);                                                    // strobe the RVSEL
+    sdelay(3);
+    P3OUT &= ~(BIT4);
+    sdelay(3);                                                          // 1us mode setup time
+
+    P4OUT |= stby;
+    P3OUT |= (BIT4);                                                    // turn on standby
+    sdelay(3);
+    P3OUT &= ~(BIT4);
+    sdelay(160);                                                        // mode to standby hold time
+
+    P4OUT |= mdir;                                                      // clock high, mdir low for reverse
+    P3OUT |= (BIT4);                                                    // strobe the RVSEL
+    sdelay(3);
+    P3OUT &= ~(BIT4);
+    sdelay(3);                                                          // first clock high
+
+    for(aii=0; aii<bii; aii++)
+    {
+        P4OUT |= mclk;                                                  // clock high, mdir low for reverse
+        P3OUT |= (BIT4);                                                // strobe the RVSEL
+        sdelay(3);
+        P3OUT &= ~(BIT4);
+        sdelay(3);                                                      // first clock high
+
+        P4OUT &= ~mclk;                                                 // clock low for reverse
+        P3OUT |= (BIT4);                                                // strobe the RVSEL
+        sdelay(3);
+        P3OUT &= ~(BIT4);
+        sdelay(3);                                                      // this completes first step
+    }
+
+    P4OUT &= ~(mclk + mdir);                                            // reset
+    P3OUT |= (BIT4);                                                    // strobe the RVSEL
+    sdelay(3);
+    P3OUT &= ~(BIT4);
+    sdelay(3);                                                          // 1us mode setup time
+
+    P4OUT &= ~stby;
+    P3OUT |= (BIT4);                                                    // turn off standby
+    sdelay(3);
+    P3OUT &= ~(BIT4);
+    sdelay(160);                                                        // mode to standby hold time
+    rsteps += bii;                                                      // save rstps
+}
+
+void    rstepdn(int bii)                                                // step in in steps
+{
+unsigned int aii;
+
+    P4OUT &= ~(mclk + mdir);                                            // setup for start up
+    P3OUT |= (BIT4);                                                    // strobe the RVSEL
+    sdelay(3);
+    P3OUT &= ~(BIT4);
+    sdelay(3);                                                          // 1us mode setup time
+
+    P4OUT |= stby;
+    P3OUT |= (BIT4);                                                    // turn on standby
+    sdelay(3);
+    P3OUT &= ~(BIT4);
+    sdelay(160);                                                        // mode to standby hold time
+
+    for(aii=0; aii<bii; aii++)
+    {
+        P4OUT |= mclk;                                                  // clock high, mdir low for reverse
+        P3OUT |= (BIT4);                                                // strobe the RVSEL
+        sdelay(3);
+        P3OUT &= ~(BIT4);
+        sdelay(3);                                                      // first clock high
+
+        P4OUT &= ~mclk;                                                 // clock low for reverse
+        P3OUT |= (BIT4);                                                // strobe the RVSEL
+        sdelay(3);
+        P3OUT &= ~(BIT4);
+        sdelay(3);                                                      // this completes first step
+    }
+
+    P4OUT &= ~(mclk + mdir);                                            // reset
+    P3OUT |= (BIT4);                                                    // strobe the RVSEL
+    sdelay(3);
+    P3OUT &= ~(BIT4);
+    sdelay(3);                                                          // 1us mode setup time
+
+    P4OUT &= ~stby;
+    P3OUT |= (BIT4);                                                    // turn off standby
+    sdelay(3);
+    P3OUT &= ~(BIT4);
+    sdelay(160);                                                        // mode to standby hold time
+    rsteps -= bii;                                                      // save rstps
+}
+
+
+void rightselchan(int bii)                                              // steppermotor driver bii is RTP 1-11
+{
+    int    aii;
+
+    P4OUT = rlastp4 & 0x1f;                                             // turn off STBY, DIR, CLK, leave voltage bits alone
+    P3OUT |= (BIT3);                                                    // strobe the LVSEL
+    sdelay(3);
+    P3OUT &= ~(BIT3);
+    sdelay(160);                                                        // wait for 100uS
+
+    aii = ((bii-1)*isteps) - rsteps;                                        // bii is channel number 0-11
+    if(aii > 0)                                                         // step out to bii position from current position rsteps
+    {
+        rstepup(aii);                                                   // step out in steps
+    }
+    if(aii < 0)                                                         // step in
+    {
+        aii = rsteps - ((bii=1)*isteps);
+        rstepdn(aii);                                                   // step in in steps
+    }
+
+    P4OUT &= ~(BIT5 + BIT6 + BIT7);
+    sdelay(3);
+
+}
+#endif
+
+#if VER5
 void rightselchan(int bii)
 {
     int    aii;
@@ -1086,6 +1425,7 @@ void rightselchan(int bii)
     sdelay(3);
 
 }
+#endif
 
 unsigned int rightscanchan(void)
 {
@@ -1104,14 +1444,15 @@ void scanhand(void)
     P1IE  = 0x00;                                                       // 0-6 inputs interrupt disable
     P1IFG = 0x00;                                                       // clear interrupt flags
 
-    // first test to activate the voltage regulators
+#if VER5
+// first test to activate the voltage regulators
     lscanvt = 4;
     rscanvt = 4;
     leftsetvoltage(lscanvt);                                            // changes P4, strobe LVSEL
     rightsetvoltage(rscanvt);                                           // changes P4, strobe RVSEL
     delay0(500);                                                        // suppress trailing edge droop
-    leftselchan(12);                                                    // changes P4, strobe LVSEL
-    rightselchan(12);                                                   // changes P4, strobe RVSEL
+    leftselchan(numpts);                                                // changes P4, strobe LVSEL
+    rightselchan(numpts);                                               // changes P4, strobe RVSEL
     delay0(setdly);                                                     // suppress leading edge spike
     leftadcval=leftscanchan();
     rightadcval=rightscanchan();
@@ -1124,7 +1465,7 @@ void scanhand(void)
         leftmin=2048;
         leftave=0;
 
-        for(i=1; i<12; i++)
+        for(i=1; i<numpts; i++)
         {
             leftselchan(i);                                             // changes P4, strobe LVSEL
             delay0(setdly);                                             // suppress leading edge spike
@@ -1157,7 +1498,7 @@ void scanhand(void)
         rightmin=2048;
         rightave=0;
 
-        for(i=1; i<12; i++)
+        for(i=1; i<numpts; i++)
         {
             rightselchan(i);                                            // changes P4, strobe RVSEL
             delay0(setdly);                                             // suppress leading edge spike
@@ -1183,30 +1524,30 @@ void scanhand(void)
     leftsetvoltage(lscanvt);                                            // changes P4, strobe LVSEL
     rightsetvoltage(rscanvt);                                           // changes P4, strobe RVSEL
 
-    leftarray[12] = 0;
-    rightarray[12] = 0;
+    leftarray[numpts] = 0;
+    rightarray[numpts] = 0;
 
-    for(j=0; j<arrayj; j++)
+    for(j=0; j<arrayj; j++)                                             // repeat scans arrayj times
     {
-        leftselchan(12);                                                // changes P4, strobe LVSEL
-        rightselchan(12);                                               // changes P4, strobe RVSEL
+        leftselchan(numpts);                                            // changes P4, strobe LVSEL
+        rightselchan(numpts);                                           // changes P4, strobe RVSEL
         delay0(setdly);                                                 // suppress leading edge spike
         leftadcval=leftscanchan();
         rightadcval=rightscanchan();
-        leftadcarray[12][j] = leftadcval;
+        leftadcarray[numpts][j] = leftadcval;
         leftarray[12] += leftadcval;
-        rightadcarray[12][j] = rightadcval;
-        rightarray[12] += rightadcval;
+        rightadcarray[numpts][j] = rightadcval;
+        rightarray[numpts] += rightadcval;
         delay0(offdly);                                                 // suppress trailing edge droop
 
     }
 
-    leftarray[12] = leftarray[12]>>arrayc;
-    rightarray[12] = rightarray[12]>>arrayc;
+    leftarray[numpts] = leftarray[numpts]>>arrayc;
+    rightarray[numpts] = rightarray[numpts]>>arrayc;
 
     for(j=0;j<arrayj;j++)                                               // VER3
     {
-        for(i=1;i<12;i++)
+        for(i=1;i<numpts;i++)
         {
             leftselchan(i);                                             // changes P4, strobe LVSEL
             rightselchan(i);                                            // changes P4, strobe RVSEL
@@ -1232,11 +1573,11 @@ void scanhand(void)
     rightmin=2048;
     rightave=0;
 
-    for(i=1;i<12;i++)
+    for(i=1;i<numpts;i++)
     {
         leftarray[i]=0;
         rightarray[i]=0;
-        for(j=0;j<arrayj;j++)                                           // VER3
+        for(j=0;j<arrayj;j++)                                           // VER3 repeat scan arrayj times
         {
             leftarray[i]+=leftadcarray[i][j];
             rightarray[i]+=rightadcarray[i][j];
@@ -1244,8 +1585,8 @@ void scanhand(void)
         leftarray[i] = leftarray[i]>>arrayc;                            // VER3 get average
         rightarray[i] = rightarray[i]>>arrayc;                          // VER3
 
-        leftarray[i] = leftarray[i] - leftarray[12];
-        rightarray[i] = rightarray[i] - rightarray[12];
+        leftarray[i] = leftarray[i] - leftarray[numpts];
+        rightarray[i] = rightarray[i] - rightarray[numpts];
 
         if(leftarray[i] < 0)
             leftarray[i] = 0;
@@ -1264,8 +1605,125 @@ void scanhand(void)
         if(rightmin > rightarray[i])
             rightmin=rightarray[i];
     }
-    leftave=leftave/11;
-    rightave=rightave/11;
+    leftave=leftave/(numpts-1);
+    rightave=rightave/(numpts-1);
+#endif
+
+#if VER6
+
+    fsteps = (((scalenumber-1) * incperscale)+minscale)/lnperstep;
+    isteps = fsteps/(numpts-2);
+
+// return to zero position
+//    lstepdn(lsteps);
+//    rstepdn(rsteps);
+
+// first test to activate the voltage regulators
+    lscanvt = 4;
+    rscanvt = 4;
+    leftsetvoltage(lscanvt);                                            // changes P4, strobe LVSEL
+    rightsetvoltage(rscanvt);                                           // changes P4, strobe RVSEL
+    delay0(500);                                                        // suppress trailing edge droop
+    leftselchan(1);                                                     // changes P4, strobe LVSEL
+    rightselchan(1);                                                    // changes P4, strobe RVSEL
+    delay0(setdly);                                                     // suppress leading edge spike
+    leftadcval=leftscanchan();
+    rightadcval=rightscanchan();
+
+    while(lscanvt < 10)
+    {
+        leftsetvoltage(lscanvt);                                        // changes P4, strobe LVSEL
+        // scan first point to adjust for minimum response
+        leftselchan(1);                                                 // changes P4, strobe LVSEL
+        delay0(setdly);                                                 // suppress leading edge spike
+        leftadcval=leftscanchan();
+        leftarray[1] = leftadcval;
+        delay0(offdly);                                                 // suppress trailing edge droop
+        lscanvt+=1;                                                     // set next higher voltage
+
+        if(leftadcval > llimit)                                         // found the level
+        {
+            break;
+        }
+    }
+
+    while(rscanvt < 10)
+    {
+        rightsetvoltage(rscanvt);                                       // changes P4, strobe RVSEL
+        // scan first point to adjust for minimum response
+        rightselchan(1);                                                // changes P4, strobe RVSEL
+        delay0(setdly);                                                 // suppress leading edge spike
+        rightadcval=rightscanchan();
+        rightarray[1] = rightadcval;
+        delay0(offdly);                                                 // suppress trailing edge droop
+        rscanvt+=1;
+
+        if(rightadcval > rlimit)                                        // found the level
+        {
+            break;
+        }
+    }
+
+    leftsetvoltage(lscanvt);                                            // changes P4, strobe LVSEL
+    rightsetvoltage(rscanvt);                                           // changes P4, strobe RVSEL
+
+    for(i=1;i<numpts;i++)
+    {
+        leftselchan(i);                                               // changes P4, strobe LVSEL
+        rightselchan(i);                                              // changes P4, strobe RVSEL
+        delay0(setdly);                                                 // suppress leading edge spike
+        for(j=0;j<arrayj;j++)
+        {
+            leftadcval=leftscanchan();
+            rightadcval=rightscanchan();
+            leftadcarray[i][j] = leftadcval;
+            rightadcarray[i][j] = rightadcval;
+        }
+
+        delay0(offdly);                                                 // suppress trailing edge droop
+    }
+
+    P1IE  = 0x7F;                                                       // 0-6 inputs interrupt enable
+    voltageoff();
+    leftselchan(1);                                                     // changes P4, strobe LVSEL return lsteps to 0
+    rightselchan(1);                                                    // changes P4, strobe RVSEL return rsteps to 0
+    scanning = false;
+
+    leftmax=0;
+    leftmin=2048;
+    leftave=0;
+
+    rightmax=0;
+    rightmin=2048;
+    rightave=0;
+
+    for(i=1;i<numpts;i++)
+    {
+        leftarray[i]=0;
+        rightarray[i]=0;
+        for(j=0;j<arrayj;j++)                                           // VER3 repeat scan arrayj times
+        {
+            leftarray[i]+=leftadcarray[i][j];
+            rightarray[i]+=rightadcarray[i][j];
+        }
+        leftarray[i] = leftarray[i]>>arrayc;                            // VER3 get average
+        rightarray[i] = rightarray[i]>>arrayc;                          // VER3
+
+        leftave+=leftarray[i];
+        if(leftmax < leftarray[i])
+            leftmax = leftarray[i];
+        if(leftmin > leftarray[i])
+            leftmin=leftarray[i];
+
+        rightave+=rightarray[i];
+        if(rightmax < rightarray[i])
+            rightmax = rightarray[i];
+        if(rightmin > rightarray[i])
+            rightmin=rightarray[i];
+    }
+    leftave=leftave/(numpts-1);
+    rightave=rightave/(numpts-1);
+#endif
 
     iPixC = 16;                                                         // 16 pixels horizontal
     iPixR = 20;                                                         // 20 pixels vertical
@@ -1296,10 +1754,10 @@ void scanhand(void)
         rightrange = 0x7fff;
     }
 
-    for (i=1;i<12;++i)                                                  // get values from adc
+    for (i=1;i<numpts;++i)                                              // get values from adc
     {
         ltmp=leftarray[i]-leftave;
-        ltmp = ltmp*7;
+        ltmp = ltmp*maxbars;
         ltmp = ltmp / leftrange;
 
         if(ltmp > 1)
@@ -1312,7 +1770,7 @@ void scanhand(void)
         }
 
         ltmp=rightarray[i]-rightave;
-        ltmp = ltmp*7;
+        ltmp = ltmp*maxbars;
         ltmp = ltmp / rightrange;
 
         if(ltmp > 1)
@@ -1324,13 +1782,13 @@ void scanhand(void)
             rightbar[i]=0;
         }
 
-        if (leftbar[i] > 7)
+        if (leftbar[i] > maxbars)
         {
-            leftbar[i] =7;
+            leftbar[i] =maxbars;
         };
-        if (rightbar[i] > 7)
+        if (rightbar[i] > maxbars)
         {
-            rightbar[i] =7;
+            rightbar[i] =maxbars;
         };
     }
 
@@ -1411,6 +1869,24 @@ int Init(void)
     switchcnt=0;
     scanit = false;
     scanning = false;
+#if VER6
+    if(scalenumber==0)
+    {
+        scalenumber=23;
+        lsteps=0;
+        rsteps=0;
+        // return to zero position
+        fsteps = (((scalenumber-1) * incperscale)+minscale)/lnperstep;  // set to largest scale
+        isteps = fsteps/(numpts-2);
+        leftselchan(11);                                                // changes P4, strobe RVSEL
+        rightselchan(11);                                               // changes P4, strobe RVSEL
+        leftselchan(1);                                                 // changes P4, strobe RVSEL
+        rightselchan(1);                                                // changes P4, strobe RVSEL
+        scalenumber=1;
+        fsteps = (((scalenumber-1) * incperscale)+minscale)/lnperstep;  // reset to smallest scale
+        isteps = fsteps/(numpts-2);
+    }
+ #endif
 
 #if  clktest
     P2SEL |=0x01;                                                       // turn on aclk for test
@@ -1467,18 +1943,18 @@ void printscanning(void)
 
 void printbars(void)
 {
-    unsigned int i, j;
+    unsigned int i, k;
+    int j, l, m;
 
     iPixC = 16;                                                         // 16 pixels horizontal
     iPixR = 20;                                                         // 20 pixels vertical
 //
 //  Blank bar areas
 //
-    ichar='Z';
-    for (i=1;i<12;i++)                                                  // display left hand scan result
+    ichar=' ';
+    for (i=1;i<numbar;i++)                                              // display left hand scan result
     {
         iRows=11-i;
-        ichar=' ';
         iCols=2;
         for (j=0;j<15;j++)
         {
@@ -1487,22 +1963,45 @@ void printbars(void)
         }
     }
 
-    ichar='Z';
-    for (i=1;i<12;i++)                                                  // display left hand scan result
+    for (i=1;i<numbar;i++)                                              // display left hand scan result
     {
         iRows=11-i;
         iCols=2;
+        j=0;
+        m=leftbar[i];
         for (j=0;j<leftbar[i];j++)
         {
+            l=0;
+            for(k=0;k<8;k++)
+            {
+                if(j<m)
+                {
+                    l+=1;
+                }
+                j+=1;
+            }
+            ichar=0x7F + l;
             charAll(0xff, 0xff, 0xff);
             iCols+=1;
         }
 
-        iCols=17-rightbar[i];
+        m=rightbar[i];
+        iCols=16;
+        j=0;
         for (j=0;j<rightbar[i];j++)
         {
+            l=0;
+            for(k=0;k<8;k++)
+            {
+                if(j<m)
+                {
+                    l+=1;
+                }
+                j+=1;
+            }
+            ichar=0x87 + l;
             charAll(0xff, 0xff, 0xff);
-            iCols+=1;
+            iCols-=1;
         }
     }
 
@@ -1577,6 +2076,28 @@ void rewritescr(void)
     ichar = 'N';
     charAll(0xff, 0xff, 0xff);                                          // black color
 
+#if VER6
+    iRows=5;
+    iCols=3;
+    ichar='S';
+    charAll(0xff, 0xff, 0xff);
+    iCols++;
+    ichar='C';
+    charAll(0xff, 0xff, 0xff);
+    iCols++;
+    ichar='A';
+    charAll(0xff, 0xff, 0xff);
+    iCols++;
+    ichar='L';
+    charAll(0xff, 0xff, 0xff);
+    iCols++;
+    ichar='E';
+    charAll(0xff, 0xff, 0xff);
+    iCols++;
+    ichar=':';
+    charAll(0xff, 0xff, 0xff);
+#endif
+
     iRows=4;
     iCols=3;
     ichar='L';
@@ -1614,7 +2135,8 @@ void rewritescr(void)
     LabelAry[4] = ':';
 
     iRows=3;
-    for (i=0;i<5;i++) {
+    for (i=0;i<5;i++)
+    {
         iCols=3+i;
         ichar=LabelAry[i];
         charAll(0xff, 0xff, 0xff);                                      // black color
@@ -1627,7 +2149,7 @@ void rewritescr(void)
 
     displaytimer=90;                                                    // 90 sec LED on
     norewrite=true;
-//    beeper();
+    //    beeper();
 }
 
 void diagscreen(void)
@@ -1705,6 +2227,15 @@ void writetp(void)
     iCols=15;
     writedigits(rtpoint,0,0xff,0xff);                                   // red color
 
+#if VER6
+    // write scale number to LCD
+    iPixC = 16;                                                         // 16 pixels horizontal per char
+    iPixR = 20;                                                         // 20 pixels vertical per char
+
+    iRows=5;                                                            // write ms digit of minute
+    iCols=10;
+    writedigits(scalenumber,0,0xff,0xff);                               // red color
+#endif
 
     // write running time to LCD
     iPixC = 16;                                                         // 16 pixels horizontal per char
@@ -1772,6 +2303,7 @@ int main(void)
 
     while(1)
     {
+
         if(powerup==true)
         {
             powerup=false;
@@ -1839,6 +2371,10 @@ int main(void)
                                 rightsetvoltage(RUP);                   // changes P4, Strobe RVSEL
                             }
                         }
+#if VER6
+                        fsteps = (((scalenumber-1) * incperscale)+minscale)/lnperstep;
+                        isteps = fsteps/(numpts-2);
+#endif
                         if(LUP > 0)
                         {
                             leftselchan(ltpoint);                       // changes P4, Strobe LVSEL
@@ -1987,6 +2523,32 @@ int main(void)
                 }
                 else
                 {
+#if VER6
+                    if(extmode==true)
+                    {
+                        if(setscale==true)
+                        {
+                            setscale=false;
+                        }
+                        else
+                        {
+                            setscale=true;
+                        }
+                    }
+                    else
+                    {
+                        UserMinutes += 15;                                  // add 15 minutes
+                        if(UserMinutes>90)
+                        {
+                            UserMinutes=0;                                  // wrap around
+                            MIN=0;                                          // stop running clock
+                            SEC=0;
+                            voltageoff();
+                        }// wrap around
+                        needsetvoltage=true;
+                    }
+#endif
+#if VER5
                     UserMinutes += 15;                                  // add 15 minutes
                     if(UserMinutes>90)
                     {
@@ -1996,6 +2558,7 @@ int main(void)
                         voltageoff();
                     }// wrap around
                     needsetvoltage=true;
+#endif
                 }
                 P3OUT |= (BIT2);                                        // turn on LLED
                 beeper();
@@ -2050,9 +2613,25 @@ int main(void)
 
                 if(extmode == true)
                 {
+#if VER6
+                    if(setscale==true)
+                    {
+                        scalenumber +=1;
+                        if(scalenumber>23)
+                            scalenumber = 1;
+                    }
+                    else
+                    {
+                        ltpoint +=1;
+                        if(ltpoint>11)                                      // VER5 init ltpoint to 0
+                            ltpoint=1;
+                    }
+#endif
+#if VER5
                     ltpoint +=1;
                     if(ltpoint>11)                                      // VER5 init ltpoint to 0
                         ltpoint=1;
+#endif
                 }
                 else
                 {
@@ -2086,9 +2665,25 @@ int main(void)
 
                 if(extmode == true)
                 {
+#if VER6
+                    if(setscale==true)
+                    {
+                        scalenumber +=1;
+                        if(scalenumber>23)
+                            scalenumber = 1;
+                    }
+                    else
+                    {
+                        rtpoint +=1;
+                        if(rtpoint>11)                                      // VER5 init rtpoint to 0
+                            rtpoint=1;
+                    }
+#endif
+#if VER5
                     rtpoint +=1;
                     if(rtpoint>11)                                      // VER5 init rtpoint to 0
                         rtpoint=1;
+#endif
                 }
                 else
                 {
@@ -2122,10 +2717,27 @@ int main(void)
 
                 if(extmode == true)
                 {
+#if VER6
+                    if(setscale==true)
+                    {
+                        scalenumber -=1;
+                        if(scalenumber<1)
+                            scalenumber = 1;
+                    }
+                    else
+                    {
+                        if(ltpoint>1)                                       // VER5 init ltpoint to 0
+                        {
+                            ltpoint -=1;
+                        }
+                    }
+#endif
+#if VER5
                     if(ltpoint>1)                                       // VER5 init ltpoint to 0
                     {
                         ltpoint -=1;
                     }
+#endif
                 }
                 else
                 {
@@ -2152,10 +2764,27 @@ int main(void)
 
                 if(extmode == true)
                 {
-                    if(rtpoint>1)                                       // VER5 init rtpoint to 0
+#if VER6
+                    if(setscale==true)
+                    {
+                        scalenumber -=1;
+                        if(scalenumber<1)
+                            scalenumber = 1;
+                    }
+                    else
+                    {
+                        if(rtpoint>1)                                       // VER5 init ltpoint to 0
+                        {
+                            rtpoint -=1;
+                        }
+                    }
+#endif
+#if VER5
+                    if(rtpoint>1)                                       // VER5 init ltpoint to 0
                     {
                         rtpoint -=1;
                     }
+#endif
                 }
                 else
                 {
